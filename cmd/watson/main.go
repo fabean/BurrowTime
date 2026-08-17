@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/josh/burrowtime/internal/cli"
+	"github.com/fabean/BurrowTime/internal/cli"
 )
 
 func main() {

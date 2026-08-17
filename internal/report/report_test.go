@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/josh/burrowtime/internal/store"
+	"github.com/fabean/BurrowTime/internal/store"
 )
 
 func TestPartialFilteringAndAnyTagSemantics(t *testing.T) {

@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/josh/burrowtime/internal/store"
+	"github.com/fabean/BurrowTime/internal/store"
 )
 
 type Options struct {

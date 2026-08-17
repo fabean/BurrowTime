@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	btConfig "github.com/josh/burrowtime/internal/config"
+	btConfig "github.com/fabean/BurrowTime/internal/config"
 	"github.com/spf13/cobra"
 )
 

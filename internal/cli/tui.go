@@ -9,9 +9,9 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	btReport "github.com/josh/burrowtime/internal/report"
-	"github.com/josh/burrowtime/internal/store"
-	"github.com/josh/burrowtime/internal/watson"
+	btReport "github.com/fabean/BurrowTime/internal/report"
+	"github.com/fabean/BurrowTime/internal/store"
+	"github.com/fabean/BurrowTime/internal/watson"
 )
 
 type menuItem struct{ name, description, example string }

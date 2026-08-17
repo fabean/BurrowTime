@@ -8,9 +8,9 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/josh/burrowtime/internal/config"
-	"github.com/josh/burrowtime/internal/store"
-	"github.com/josh/burrowtime/internal/watson"
+	"github.com/fabean/BurrowTime/internal/config"
+	"github.com/fabean/BurrowTime/internal/store"
+	"github.com/fabean/BurrowTime/internal/watson"
 )
 
 func TestSplitCommandLine(t *testing.T) {

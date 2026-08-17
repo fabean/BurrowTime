@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/josh/burrowtime/internal/store"
+	"github.com/fabean/BurrowTime/internal/store"
 )
 
 func TestFirstRunOfferImportsWatsonCopy(t *testing.T) {

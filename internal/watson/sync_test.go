@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/josh/burrowtime/internal/store"
+	"github.com/fabean/BurrowTime/internal/store"
 )
 
 func TestSyncWireProtocolAndStateTransition(t *testing.T) {

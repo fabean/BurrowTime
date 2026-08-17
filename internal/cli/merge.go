@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/josh/burrowtime/internal/store"
+	"github.com/fabean/BurrowTime/internal/store"
 	"github.com/spf13/cobra"
 )
 

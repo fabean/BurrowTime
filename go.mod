@@ -1,4 +1,4 @@
-module github.com/josh/burrowtime
+module github.com/fabean/BurrowTime
 
 go 1.24.0
 

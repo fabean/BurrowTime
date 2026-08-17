@@ -16,10 +16,10 @@ import (
 	"time"
 	"unicode/utf8"
 
-	btDatetime "github.com/josh/burrowtime/internal/datetime"
-	btReport "github.com/josh/burrowtime/internal/report"
-	"github.com/josh/burrowtime/internal/store"
-	"github.com/josh/burrowtime/internal/watson"
+	btDatetime "github.com/fabean/BurrowTime/internal/datetime"
+	btReport "github.com/fabean/BurrowTime/internal/report"
+	"github.com/fabean/BurrowTime/internal/store"
+	"github.com/fabean/BurrowTime/internal/watson"
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 )

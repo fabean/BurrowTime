@@ -13,8 +13,8 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/josh/burrowtime/internal/store"
-	"github.com/josh/burrowtime/internal/watson"
+	"github.com/fabean/BurrowTime/internal/store"
+	"github.com/fabean/BurrowTime/internal/watson"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 	"golang.org/x/term"

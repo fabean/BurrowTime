@@ -34,16 +34,16 @@ which allows its `GITHUB_TOKEN` to create a release and upload assets.
 
 Before the first release:
 
-1. Create the public `github.com/josh/burrowtime` repository.
-2. Add it as this checkout's `origin` and push the default branch.
-3. Confirm GitHub Actions are enabled.
-4. Run a local snapshot and inspect `dist/`:
+1. Confirm `github.com/fabean/BurrowTime` is the public `origin` and the default
+   branch is pushed.
+2. Confirm GitHub Actions are enabled.
+3. Run a local snapshot and inspect `dist/`:
 
    ```bash
    goreleaser release --snapshot --clean
    ```
 
-5. Create and push an annotated semantic-version tag:
+4. Create and push an annotated semantic-version tag:
 
    ```bash
    git tag -a v0.1.0 -m "BurrowTime v0.1.0"
@@ -90,14 +90,14 @@ References:
 
 ## Homebrew
 
-Use a separate public repository named `josh/homebrew-tap`. Current GoReleaser
+Use a separate public repository named `fabean/homebrew-tap`. Current GoReleaser
 uses `homebrew_casks` for prebuilt command-line assets; the older `brews`
 integration is deprecated.
 
 One-time setup:
 
-1. Create the tap with `brew tap-new josh/tap` and publish it as
-   `josh/homebrew-tap`.
+1. Create the tap with `brew tap-new fabean/tap` and publish it as
+   `fabean/homebrew-tap`.
 2. Add a `homebrew_casks` entry that consumes the `release` archive and installs
    both `burrowtime` and `watson`.
 3. Create a fine-grained token with write access to the tap repository and add
@@ -106,7 +106,7 @@ One-time setup:
 5. Test installation on both Apple Silicon and Intel macOS before advertising:
 
    ```bash
-   brew install --cask josh/tap/burrowtime
+   brew install --cask fabean/tap/burrowtime
    burrowtime --version
    ```
 
@@ -129,7 +129,7 @@ Potential rollout order:
 
 1. GitHub Releases and `go install`;
 2. `burrowtime-bin` on AUR;
-3. `josh/homebrew-tap` for macOS and Linuxbrew;
+3. `fabean/homebrew-tap` for macOS and Linuxbrew;
 4. a Scoop bucket for Windows;
 5. official/community repositories after the project has users and stable
    releases.

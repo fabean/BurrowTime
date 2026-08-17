@@ -6,8 +6,8 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/josh/burrowtime/internal/store"
-	"github.com/josh/burrowtime/internal/watson"
+	"github.com/fabean/BurrowTime/internal/store"
+	"github.com/fabean/BurrowTime/internal/watson"
 )
 
 func TestConcurrentCLIRequiresExplicitStopSelection(t *testing.T) {

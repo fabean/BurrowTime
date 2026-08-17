@@ -9,7 +9,7 @@ commands and data.**
 
 [![Go](https://img.shields.io/badge/Go-1.24%2B-00ADD8?logo=go&logoColor=white)](https://go.dev/)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Latest release](https://img.shields.io/github/v/release/josh/burrowtime?display_name=tag&sort=semver)](https://github.com/josh/burrowtime/releases/latest)
+[![Latest release](https://img.shields.io/github/v/release/fabean/BurrowTime?display_name=tag&sort=semver)](https://github.com/fabean/BurrowTime/releases/latest)
 
 BurrowTime is a Go port of [Watson](https://github.com/jazzband/Watson), the
 command-line time tracker. It adds an interactive Bubble Tea dashboard while
@@ -71,19 +71,19 @@ replacement.
 With Go 1.24 or newer:
 
 ```bash
-go install github.com/josh/burrowtime/cmd/burrowtime@latest
+go install github.com/fabean/BurrowTime/cmd/burrowtime@latest
 ```
 
 The optional drop-in `watson` executable can be installed alongside it:
 
 ```bash
-go install github.com/josh/burrowtime/cmd/watson@latest
+go install github.com/fabean/BurrowTime/cmd/watson@latest
 ```
 
 ### Release archives
 
 Tagged releases provide checksummed archives for Linux, macOS, and Windows on
-the [GitHub Releases page](https://github.com/josh/burrowtime/releases). Each
+the [GitHub Releases page](https://github.com/fabean/BurrowTime/releases). Each
 archive contains both `burrowtime` and the optional `watson` compatibility
 binary.
 
@@ -94,7 +94,7 @@ has been published and tested. Maintainers can follow the
 ### Build from source
 
 ```bash
-git clone https://github.com/josh/burrowtime.git
+git clone https://github.com/fabean/BurrowTime.git
 cd burrowtime
 make build
 ./bin/burrowtime
