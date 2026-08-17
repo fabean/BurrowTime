@@ -59,9 +59,10 @@ func (a *app) edit() *cobra.Command {
 		if err != nil {
 			return err
 		}
-		reader := bufio.NewReader(cmd.InOrStdin())
+		input := cmd.InOrStdin()
+		reader := bufio.NewReader(input)
 		for {
-			edited, changed, err := runEditor(initial, ".json", reader, cmd.OutOrStdout(), cmd.ErrOrStderr())
+			edited, changed, err := runEditor(initial, ".json", input, cmd.OutOrStdout(), cmd.ErrOrStderr())
 			if err != nil {
 				return err
 			}
