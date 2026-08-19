@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"strings"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/fabean/BurrowTime/internal/store"
@@ -79,6 +80,35 @@ func TestStopPickerCanChooseTimerOrAll(t *testing.T) {
 	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
 	if updated.(stopPickerModel).selection != stopAllSelection {
 		t.Fatalf("all selection=%q", updated.(stopPickerModel).selection)
+	}
+}
+
+func TestStartConflictPickerCanReplaceOrStartConcurrently(t *testing.T) {
+	timers := []store.ActiveTimer{
+		{ID: "primary", Project: "one", Tags: []string{"first"}, Start: 100, Primary: true},
+		{ID: "abcdef", Project: "two", Tags: []string{"second"}, Start: 200},
+	}
+
+	model := startConflictModel{timers: timers, project: "replacement", tags: []string{"new"}, now: time.Unix(300, 0), width: 80}
+	if view := model.View(); !strings.Contains(view, "TIMER ALREADY RUNNING") || !strings.Contains(view, "one") || !strings.Contains(view, "#first") || !strings.Contains(view, "replacement") || !strings.Contains(view, "#new") {
+		t.Fatalf("picker view is missing timer context:\n%s", view)
+	}
+	updated, command := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if selected := updated.(startConflictModel); selected.selection != startConflictReplace || command == nil {
+		t.Fatalf("replace selection=%q command=%v", selected.selection, command)
+	}
+
+	model = startConflictModel{timers: timers, project: "replacement", width: 80}
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyDown})
+	updated, command = updated.(startConflictModel).Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if selected := updated.(startConflictModel); selected.selection != startConflictConcurrent || command == nil {
+		t.Fatalf("concurrent selection=%q command=%v", selected.selection, command)
+	}
+
+	model = startConflictModel{timers: timers, project: "replacement", width: 80}
+	updated, command = model.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	if canceled := updated.(startConflictModel); !canceled.canceled || canceled.selection != "" || command == nil {
+		t.Fatalf("canceled=%v selection=%q command=%v", canceled.canceled, canceled.selection, command)
 	}
 }
 

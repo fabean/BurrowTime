@@ -136,8 +136,12 @@ is no separate or reduced interactive mode.
 ### Concurrent timers
 
 With the default settings, starting another project remains safe: if any timer
-is active, an ordinary `start` asks you to resolve it first. Choose the behavior
-explicitly when you need something else:
+is active, an ordinary `start` opens an interactive chooser. You can stop all
+active timers and replace them with the new one, or keep them running and start
+the new timer concurrently. Press Escape to leave everything unchanged.
+
+Scripts and redirected commands never wait for the TUI. They receive the
+existing `already started` error and must choose the behavior explicitly:
 
 ```bash
 # Stop every active timer, then start this one.

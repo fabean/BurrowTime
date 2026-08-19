@@ -801,6 +801,132 @@ func wrapIndex(value, length int) int {
 	return value
 }
 
+type startConflictChoice string
+
+const (
+	startConflictReplace    startConflictChoice = "replace"
+	startConflictConcurrent startConflictChoice = "concurrent"
+)
+
+type startConflictModel struct {
+	timers    []store.ActiveTimer
+	project   string
+	tags      []string
+	now       time.Time
+	cursor    int
+	selection startConflictChoice
+	canceled  bool
+	width     int
+}
+
+func (m startConflictModel) Init() tea.Cmd { return nil }
+
+func (m startConflictModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := message.(type) {
+	case tea.WindowSizeMsg:
+		m.width = msg.Width
+	case tea.KeyMsg:
+		switch msg.String() {
+		case "ctrl+c", "q", "esc":
+			m.canceled = true
+			return m, tea.Quit
+		case "up", "k", "shift+tab":
+			m.cursor = wrapIndex(m.cursor-1, 2)
+		case "down", "j", "tab":
+			m.cursor = wrapIndex(m.cursor+1, 2)
+		case "r":
+			m.selection = startConflictReplace
+			return m, tea.Quit
+		case "c":
+			m.selection = startConflictConcurrent
+			return m, tea.Quit
+		case "enter":
+			if m.cursor == 0 {
+				m.selection = startConflictReplace
+			} else {
+				m.selection = startConflictConcurrent
+			}
+			return m, tea.Quit
+		}
+	}
+	return m, nil
+}
+
+func (m startConflictModel) View() string {
+	width := max(50, min(86, m.width-4))
+	if m.width == 0 {
+		width = 72
+	}
+
+	running := make([]string, 0, min(len(m.timers), 5)+1)
+	for i, timer := range m.timers {
+		if i == 5 {
+			running = append(running, tuiMutedStyle.Render(fmt.Sprintf("  … and %d more", len(m.timers)-i)))
+			break
+		}
+		elapsed := m.now.Sub(time.Unix(timer.Start, 0))
+		if elapsed < 0 {
+			elapsed = 0
+		}
+		name := tuiTitleStyle.Render(timer.Project)
+		if len(timer.Tags) > 0 {
+			name += "  " + tuiTagStyle.Render("#"+strings.Join(timer.Tags, "  #"))
+		}
+		running = append(running, padBetween("  "+name, tuiTimeStyle.Render(formatDuration(int64(elapsed/time.Second))), width-8))
+	}
+
+	newTimer := tuiTitleStyle.Foreground(tuiPrimary).Render(m.project)
+	if len(m.tags) > 0 {
+		newTimer += "  " + tuiTagStyle.Render("#"+strings.Join(m.tags, "  #"))
+	}
+
+	options := make([]string, 0, 2)
+	replaceLabel := "Stop the current timer and replace it"
+	if len(m.timers) > 1 {
+		replaceLabel = fmt.Sprintf("Stop all %d timers and replace them", len(m.timers))
+	}
+	labels := []string{replaceLabel, "Start the new timer concurrently"}
+	details := []string{
+		"Finish active work, then start " + m.project,
+		"Keep active work running alongside " + m.project,
+	}
+	for i := range labels {
+		marker := "  "
+		labelStyle := tuiTitleStyle
+		if i == m.cursor {
+			marker = tuiBrandStyle.Render("› ")
+			labelStyle = tuiTitleStyle.Foreground(tuiPrimary)
+		}
+		options = append(options, marker+labelStyle.Render(labels[i])+"\n    "+tuiMutedStyle.Render(details[i]))
+	}
+
+	body := tuiMutedStyle.Render("BurrowTime is already tracking:") + "\n" +
+		strings.Join(running, "\n") + "\n\n" +
+		tuiMutedStyle.Render("You asked to start:") + "\n  " + newTimer + "\n\n" +
+		strings.Join(options, "\n\n")
+	footer := tuiHelp("↑/↓", "choose", "enter", "confirm", "r", "replace", "c", "concurrent", "esc", "cancel")
+	return lipgloss.NewStyle().Padding(1, 2).Render(tuiBrandStyle.Render("◷  BURROWTIME") + "\n\n" + tuiPanel("TIMER ALREADY RUNNING", body, width) + "\n" + footer)
+}
+
+func runStartConflictPicker(timers []store.ActiveTimer, project string, tags []string, now time.Time) (startConflictChoice, error) {
+	model := startConflictModel{
+		timers:  append([]store.ActiveTimer(nil), timers...),
+		project: project,
+		tags:    append([]string(nil), tags...),
+		now:     now,
+		width:   76,
+	}
+	result, err := tea.NewProgram(model, tea.WithAltScreen()).Run()
+	if err != nil {
+		return "", err
+	}
+	final := result.(startConflictModel)
+	if final.canceled || final.selection == "" {
+		return "", errors.New("Aborted!")
+	}
+	return final.selection, nil
+}
+
 const stopAllSelection = "__all__"
 
 type stopPickerModel struct {

@@ -673,6 +673,19 @@ func (a *app) start() *cobra.Command {
 		if len(timers) > 0 && !gap {
 			return fmt.Errorf("Project '%s' is already started and '--no-gap' is passed. Please stop manually.", timers[0].Project)
 		}
+		stopOnStart := s.Config.Bool("options", "stop_on_start", false)
+		if len(timers) > 0 && !concurrent && !stopSet && !stopOnStart && a.name != "watson" && commandSupportsTUI(cmd) {
+			choice, pickErr := runStartConflictPicker(timers, project, tags, s.Now())
+			if pickErr != nil {
+				return pickErr
+			}
+			switch choice {
+			case startConflictReplace:
+				stopSet, stopRunning = true, true
+			case startConflictConcurrent:
+				concurrent = true
+			}
+		}
 		if concurrent {
 			timer, startErr := s.StartConcurrent(project, tags, when)
 			if startErr != nil {
@@ -690,7 +703,7 @@ func (a *app) start() *cobra.Command {
 			return nil
 		}
 		if len(timers) > 0 {
-			shouldStop := s.Config.Bool("options", "stop_on_start", false)
+			shouldStop := stopOnStart
 			if stopSet {
 				shouldStop = stopRunning
 			}
@@ -758,6 +771,15 @@ func (a *app) start() *cobra.Command {
 	}
 	cmd.ValidArgsFunction = a.completeProjectOrTag
 	return cmd
+}
+
+func commandSupportsTUI(cmd *cobra.Command) bool {
+	if os.Getenv("BURROWTIME_TUI") == "0" {
+		return false
+	}
+	in, inOK := cmd.InOrStdin().(*os.File)
+	out, outOK := cmd.OutOrStdout().(*os.File)
+	return inOK && outOK && term.IsTerminal(int(in.Fd())) && term.IsTerminal(int(out.Fd()))
 }
 
 func (a *app) stop() *cobra.Command {
