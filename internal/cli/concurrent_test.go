@@ -2,6 +2,8 @@ package cli
 
 import (
 	"bytes"
+	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -10,6 +12,40 @@ import (
 	"github.com/fabean/BurrowTime/internal/store"
 	"github.com/fabean/BurrowTime/internal/watson"
 )
+
+func TestConcurrentStartJSONReturnsExactTimerID(t *testing.T) {
+	dir := t.TempDir()
+	firstOutput, err := runBurrowTimeCommand(dir, "start", "--concurrent", "--json", "one", "+first")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var first store.ActiveTimer
+	if err := json.Unmarshal([]byte(firstOutput), &first); err != nil {
+		t.Fatalf("decode first timer: %v\n%s", err, firstOutput)
+	}
+	if first.ID != watson.PrimaryTimerID || first.Project != "one" || !reflect.DeepEqual(first.Tags, []string{"first"}) {
+		t.Fatalf("first timer: %#v", first)
+	}
+
+	secondOutput, err := runBurrowTimeCommand(dir, "start", "--concurrent", "--json", "two", "+second")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var second store.ActiveTimer
+	if err := json.Unmarshal([]byte(secondOutput), &second); err != nil {
+		t.Fatalf("decode second timer: %v\n%s", err, secondOutput)
+	}
+	if len(second.ID) != 32 || second.Project != "two" || !reflect.DeepEqual(second.Tags, []string{"second"}) {
+		t.Fatalf("second timer: %#v", second)
+	}
+	if _, err := runBurrowTimeCommand(dir, "stop", "--timer", second.ID); err != nil {
+		t.Fatalf("stop exact timer: %v", err)
+	}
+	status, err := runBurrowTimeCommand(dir, "status")
+	if err != nil || !strings.Contains(status, "Project one") || strings.Contains(status, "Project two") {
+		t.Fatalf("unexpected status after targeted stop: %q, %v", status, err)
+	}
+}
 
 func TestConcurrentCLIRequiresExplicitStopSelection(t *testing.T) {
 	dir := t.TempDir()

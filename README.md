@@ -87,6 +87,32 @@ the [GitHub Releases page](https://github.com/fabean/BurrowTime/releases). Each
 archive contains both `burrowtime` and the optional `watson` compatibility
 binary.
 
+### Codex time-tracking skill
+
+The BurrowTime binary includes an optional Codex skill that lets an agent track
+the work you explicitly ask it to perform. Install it with:
+
+```bash
+burrowtime skill install codex
+```
+
+The command installs `track-time-with-burrowtime` under `$CODEX_HOME/skills`,
+or `~/.codex/skills` when `CODEX_HOME` is unset. It does not start a timer or
+enable time tracking for ordinary chats. Ask for tracking in the task prompt:
+
+```text
+Track this work in BurrowTime under "client portal" +PORTAL-42.
+```
+
+The skill asks for the project or task when either is missing. It starts a
+concurrent timer, records that timer's ID, and stops only that timer when the
+work ends. To update an installed skill while replacing local changes to its
+bundled files, run:
+
+```bash
+burrowtime skill install codex --force
+```
+
 Package-manager recipes will be advertised here only after their first release
 has been published and tested. Maintainers can follow the
 [distribution guide](docs/DISTRIBUTION.md) for AUR, Homebrew, and Scoop.
@@ -149,6 +175,9 @@ burrowtime start --stop "client call" +meeting
 
 # Keep existing timers running and add another.
 burrowtime start --concurrent "background export" +ops
+
+# Return the new timer ID for an agent or script.
+burrowtime start --concurrent --json "background export" +ops
 ```
 
 If Watson's `options.stop_on_start` setting is enabled, `--no-stop` restores
@@ -187,6 +216,7 @@ each project and to the combined total.
 | `config` | Read or update Watson-compatible settings |
 | `sync` | Synchronize with a Watson-compatible server |
 | `migrate` | Copy data between BurrowTime and Watson |
+| `skill` | Install bundled agent skills |
 | `completion` | Generate shell completion scripts |
 
 ### TUI controls

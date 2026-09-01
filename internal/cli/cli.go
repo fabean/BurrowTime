@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bufio"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -157,6 +158,8 @@ func clickUsage(command *cobra.Command) string {
 		suffix = "[OPTIONS] SECTION.OPTION [VALUE]"
 	case "edit", "restart":
 		suffix = "[OPTIONS] [ID]"
+	case "install":
+		suffix = "[OPTIONS] AGENT"
 	case "merge":
 		suffix = "[OPTIONS] FRAMES_WITH_CONFLICT"
 	case "remove":
@@ -206,9 +209,10 @@ func formatUsageFailure(command *cobra.Command, err error) string {
 		expected, _ := strconv.Atoi(match[1])
 		received, _ := strconv.Atoi(match[2])
 		names := map[string][]string{
-			"merge":  {"FRAMES_WITH_CONFLICT"},
-			"remove": {"ID"},
-			"rename": {"TYPE", "OLD_NAME", "NEW_NAME"},
+			"install": {"AGENT"},
+			"merge":   {"FRAMES_WITH_CONFLICT"},
+			"remove":  {"ID"},
+			"rename":  {"TYPE", "OLD_NAME", "NEW_NAME"},
 		}
 		if received < expected && received < len(names[command.Name()]) {
 			message = fmt.Sprintf("Missing argument '%s'.", names[command.Name()][received])
@@ -456,7 +460,7 @@ func (a *app) root() *cobra.Command {
 					stylingEnabled = term.IsTerminal(int(file.Fd()))
 				}
 			}
-			if a.name == "burrowtime" && cmd.CommandPath() != "burrowtime migrate" && cmd.Parent() != nil && cmd.Parent().Name() != "migrate" {
+			if a.name == "burrowtime" && !commandBelongsTo(cmd, "migrate") && !commandBelongsTo(cmd, "skill") {
 				customDir := cmd.Flags().Changed("data-dir") || cmd.Flags().Changed("watson-dir")
 				if !customDir {
 					in, inOK := cmd.InOrStdin().(*os.File)
@@ -509,9 +513,18 @@ func (a *app) root() *cobra.Command {
 	root.AddCommand(a.rename(), a.config())
 	root.AddCommand(a.edit(), a.merge(), a.sync())
 	if a.name != "watson" {
-		root.AddCommand(a.migrate())
+		root.AddCommand(a.migrate(), a.skill())
 	}
 	return root
+}
+
+func commandBelongsTo(cmd *cobra.Command, name string) bool {
+	for current := cmd; current != nil; current = current.Parent() {
+		if current.Name() == name {
+			return true
+		}
+	}
+	return false
 }
 
 func parseProjectTags(args []string) (string, []string) {
@@ -630,7 +643,7 @@ func isoWeekDate(year, week, weekday int, loc *time.Location) time.Time {
 func (a *app) start() *cobra.Command {
 	var at string
 	gap := true
-	var stopSet, stopRunning, concurrent bool
+	var stopSet, stopRunning, concurrent, jsonOutput bool
 	var confirmProject, confirmTag bool
 	cmd := &cobra.Command{Use: "start [project] [+tag ...]", Short: "Start monitoring time for the given project.", Args: cobra.ArbitraryArgs, RunE: func(cmd *cobra.Command, args []string) error {
 		if at != "" && (cmd.Flags().Changed("gap") || cmd.Flags().Changed("no-gap")) {
@@ -695,6 +708,9 @@ func (a *app) start() *cobra.Command {
 			if when != nil {
 				displayStart = *when
 			}
+			if jsonOutput {
+				return json.NewEncoder(cmd.OutOrStdout()).Encode(timer)
+			}
 			if len(timers) == 0 {
 				fmt.Fprintf(cmd.OutOrStdout(), "Starting project %s%s at %s\n", styleText("project", timer.Project), formatTags(timer.Tags), styleText("time", displayStart.Format("15:04")))
 			} else {
@@ -719,7 +735,7 @@ func (a *app) start() *cobra.Command {
 				if stopErr != nil {
 					return stopErr
 				}
-				if stopSet && stopRunning {
+				if stopSet && stopRunning && !jsonOutput {
 					fmt.Fprintf(cmd.OutOrStdout(), "Stopped %d running %s.\n", len(stopped), plural(len(stopped), "timer", "timers"))
 				}
 			}
@@ -731,6 +747,10 @@ func (a *app) start() *cobra.Command {
 		displayStart := time.Unix(state.Start, 0).In(s.Now().Location())
 		if when != nil {
 			displayStart = *when
+		}
+		if jsonOutput {
+			timer := store.ActiveTimer{ID: watson.PrimaryTimerID, Project: state.Project, Start: state.Start, Tags: state.Tags, Primary: true}
+			return json.NewEncoder(cmd.OutOrStdout()).Encode(timer)
 		}
 		fmt.Fprintf(cmd.OutOrStdout(), "Starting project %s%s at %s\n", styleText("project", state.Project), formatTags(state.Tags), styleText("time", displayStart.Format("15:04")))
 		return nil
@@ -768,6 +788,7 @@ func (a *app) start() *cobra.Command {
 			return err
 		})
 		cmd.Flags().BoolVar(&concurrent, "concurrent", false, "start another timer concurrently")
+		cmd.Flags().BoolVar(&jsonOutput, "json", false, "output the started timer as JSON")
 	}
 	cmd.ValidArgsFunction = a.completeProjectOrTag
 	return cmd

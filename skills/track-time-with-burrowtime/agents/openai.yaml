@@ -1,0 +1,4 @@
+interface:
+  display_name: "Track time with BurrowTime"
+  short_description: "Track explicit agent work in BurrowTime"
+  default_prompt: "Use $track-time-with-burrowtime to track this task in BurrowTime."
