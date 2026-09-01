@@ -126,3 +126,28 @@ func TestActiveTimersUseACompanionWithoutChangingWatsonState(t *testing.T) {
 		t.Fatalf("loaded %#v, want %#v", loaded, timers)
 	}
 }
+
+func TestAgentSessionsUseASeparateVersionedCompanion(t *testing.T) {
+	dir := t.TempDir()
+	repo, _ := New(dir)
+	sessions := []AgentSession{{
+		ID: "session", TimerID: "primary", Client: "codex", Project: "burrowtime", Task: "BT-42",
+		Tags: []string{"BT-42"}, Status: AgentSessionActive, StartedAt: 10, HeartbeatAt: 20,
+		LeaseSeconds: 900, FrameIDs: []string{},
+	}}
+	if err := repo.SaveAgentSessions(sessions); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := repo.LoadAgentSessions()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(loaded, sessions) {
+		t.Fatalf("loaded %#v, want %#v", loaded, sessions)
+	}
+	for _, watsonFile := range []string{"frames", "state"} {
+		if _, err := os.Stat(filepath.Join(dir, watsonFile)); !os.IsNotExist(err) {
+			t.Fatalf("agent session write created %s", watsonFile)
+		}
+	}
+}

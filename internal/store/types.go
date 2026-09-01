@@ -110,3 +110,37 @@ func (t ActiveTimer) Running() bool { return t.Project != "" }
 func (t ActiveTimer) State() State {
 	return State{Project: t.Project, Start: t.Start, Tags: append([]string(nil), t.Tags...)}
 }
+
+type AgentSessionStatus string
+
+const (
+	AgentSessionActive          AgentSessionStatus = "active"
+	AgentSessionPaused          AgentSessionStatus = "paused"
+	AgentSessionStopped         AgentSessionStatus = "stopped"
+	AgentSessionExpired         AgentSessionStatus = "expired"
+	AgentSessionManuallyStopped AgentSessionStatus = "manually_stopped"
+	AgentSessionCanceled        AgentSessionStatus = "canceled"
+)
+
+// AgentSession adds agent ownership and lifecycle data around ordinary
+// BurrowTime timers. Completed work still lives in Watson-compatible frames.
+type AgentSession struct {
+	ID             string             `json:"id"`
+	TimerID        string             `json:"timer_id,omitempty"`
+	Client         string             `json:"client"`
+	Owner          string             `json:"owner,omitempty"`
+	Project        string             `json:"project"`
+	Task           string             `json:"task"`
+	Tags           []string           `json:"tags"`
+	Repository     string             `json:"repository,omitempty"`
+	Branch         string             `json:"branch,omitempty"`
+	IdempotencyKey string             `json:"idempotency_key,omitempty"`
+	Status         AgentSessionStatus `json:"status"`
+	StartedAt      int64              `json:"started_at"`
+	HeartbeatAt    int64              `json:"heartbeat_at"`
+	LeaseSeconds   int64              `json:"lease_seconds"`
+	StoppedAt      *int64             `json:"stopped_at,omitempty"`
+	FrameIDs       []string           `json:"frame_ids"`
+}
+
+func (s AgentSession) Running() bool { return s.Status == AgentSessionActive }

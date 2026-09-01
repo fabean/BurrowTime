@@ -4,8 +4,8 @@
   <img src="assets/burrowtime-mascot.png" alt="BurrowTime gopher mascot holding a pocket watch beside a terminal in its burrow" width="360">
 </p>
 
-**Fast, local time tracking with a friendly terminal UI and Watson-compatible
-commands and data.**
+**Local time tracking for you and your coding agents, with a friendly terminal
+UI and Watson-compatible commands and data.**
 
 [![Go](https://img.shields.io/badge/Go-1.24%2B-00ADD8?logo=go&logoColor=white)](https://go.dev/)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
@@ -16,6 +16,11 @@ command-line time tracker. It adds an interactive Bubble Tea dashboard while
 preserving Watson's commands and on-disk format. Existing Watson users can
 copy their history into BurrowTime on first launch and move it back later—no
 conversion, account, or hosted service is required.
+
+BurrowTime also gives coding agents a safe way to track the work you explicitly
+ask them to perform. Agent sessions use the same local timers and reports you
+use yourself, with exact ownership, retry protection, leases for interrupted
+work, and integrations for popular coding agents and MCP clients.
 
 ```console
 $ burrowtime start "client portal" +review
@@ -36,6 +41,9 @@ client portal - 2h 14m 08s
   recent activity, interactive logs, report charts, date ranges, and filtering.
 - **A scriptable CLI.** Direct commands, JSON, CSV, pipes, shell completions,
   and stable exit codes remain first-class features.
+- **Built for coding agents.** Codex, Claude Code, Cursor, Gemini, OpenCode, and
+  MCP clients can track only the work you request, without taking control of
+  unrelated timers.
 - **Watson-compatible data.** BurrowTime uses Watson's `config`, `frames`,
   `state`, and `last_sync` formats in its own safe data directory.
 - **Local by default.** Your time data stays in ordinary files on your machine.
@@ -52,8 +60,9 @@ Watson executable:
 | Running with no command | Non-interactive CLI behavior | Bubble Tea dashboard |
 | CLI commands and output | Original behavior | Watson-compatible behavior, JSON, CSV, and exit codes |
 | Data location | Watson directory and `WATSON_DIR` | Separate BurrowTime directory and `BURROWTIME_DIR` |
-| Data format | `config`, `frames`, `state`, `last_sync` | Same formats, plus `active_timers` when concurrency is used |
+| Data format | `config`, `frames`, `state`, `last_sync` | Same formats, plus companion files for concurrency and agent sessions |
 | Active timers | One | One by default, with explicit concurrent timers available |
+| Coding agents | No dedicated workflow | Owned sessions, safe retries, leases, skills, and MCP tools |
 | Stopping multiple timers | Not applicable | Interactive picker, `--timer`, or `--all` |
 | Logs and reports | CLI output and filters | Compatible CLI plus interactive views, charts, ranges, and filters |
 | Moving data | Operates directly on its own directory | Copies data from or back to Watson with confirmation and backups |
@@ -87,31 +96,73 @@ the [GitHub Releases page](https://github.com/fabean/BurrowTime/releases). Each
 archive contains both `burrowtime` and the optional `watson` compatibility
 binary.
 
-### Codex time-tracking skill
+### Agent time tracking
 
-The BurrowTime binary includes an optional Codex skill that lets an agent track
-the work you explicitly ask it to perform. Install it with:
+The BurrowTime binary contains an optional skill for coding agents. Downloading
+the binary does not install or activate the skill. Install it once for your
+agent:
 
 ```bash
 burrowtime skill install codex
+burrowtime skill install claude
+burrowtime skill install cursor
+burrowtime skill install gemini
+burrowtime skill install opencode
+
+# Install the shared skill plus Claude Code's copy.
+burrowtime skill install all
 ```
 
-The command installs `track-time-with-burrowtime` under `$CODEX_HOME/skills`,
-or `~/.codex/skills` when `CODEX_HOME` is unset. It does not start a timer or
-enable time tracking for ordinary chats. Ask for tracking in the task prompt:
+Codex, Cursor, Gemini, and OpenCode share the copy under
+`~/.agents/skills/track-time-with-burrowtime`. Claude Code uses
+`~/.claude/skills/track-time-with-burrowtime`. The skill does not track ordinary
+chats. Ask for tracking in the task prompt:
 
 ```text
 Track this work in BurrowTime under "client portal" +PORTAL-42.
 ```
 
-The skill asks for the project or task when either is missing. It starts a
-concurrent timer, records that timer's ID, and stops only that timer when the
-work ends. To update an installed skill while replacing local changes to its
-bundled files, run:
+If the project or task is missing, the skill asks for it before starting work.
+It checks the installed binary's agent protocol, creates an agent session,
+renews its lease during long work, pauses while waiting for required input, and
+stops that exact session at the end. Check the installation and the binary on
+your `PATH` with:
+
+```bash
+burrowtime skill doctor codex
+burrowtime skill doctor all
+```
+
+This catches an old binary paired with a newer skill. To replace local changes
+with the files bundled in the current binary, run:
 
 ```bash
 burrowtime skill install codex --force
 ```
+
+Releases before the shared installer used
+`~/.codex/skills/track-time-with-burrowtime`. The installer warns when that
+legacy copy is still present, and `skill doctor` treats it as a duplicate so
+you can remove it deliberately.
+
+Agents without compatible skill discovery can use BurrowTime's MCP server.
+Configure the agent to launch `burrowtime mcp` over standard input and output.
+A typical MCP entry is:
+
+```json
+{
+  "mcpServers": {
+    "burrowtime": {
+      "command": "burrowtime",
+      "args": ["mcp"]
+    }
+  }
+}
+```
+
+The MCP server provides start, heartbeat, pause, resume, stop, status, recovery,
+reporting, and capability tools. The same explicit-request rule still applies.
+An agent should start tracking only when you ask it to.
 
 Package-manager recipes will be advertised here only after their first release
 has been published and tested. Maintainers can follow the
@@ -200,6 +251,65 @@ Every completed timer is written as an ordinary Watson frame. Reports count
 each timer's full duration, so overlapping time contributes independently to
 each project and to the combined total.
 
+### Agent-owned sessions
+
+Agent sessions are metadata around standard BurrowTime timers. They do not
+create a second kind of billable record. A completed session still becomes an
+ordinary Watson frame and appears in normal logs and reports.
+
+Start a session directly with:
+
+```bash
+burrowtime agent start \
+  --client codex \
+  --project "client portal" \
+  --task PORTAL-42 \
+  --lease 30m \
+  --json
+```
+
+The JSON result contains `session.id`. Agent integrations retain that ID and
+use it for every later action:
+
+```bash
+burrowtime agent heartbeat --session <session-id> --json
+burrowtime agent pause --session <session-id> --json
+burrowtime agent resume --session <session-id> --json
+burrowtime agent stop --session <session-id> --json
+```
+
+`agent start` accepts `--owner` for a conversation or run ID and
+`--idempotency-key` for safe retries. Leases prevent an interrupted agent from
+leaving an unbounded timer behind. Run `burrowtime agent recover` to close
+expired sessions at their lease deadline. `burrowtime agent status` lists
+sessions, and `burrowtime agent report` groups recorded time by session and
+client.
+
+You can still stop an agent's active timer with normal commands or the TUI.
+`burrowtime stop` works when it is the only timer. With several timers, select
+it in the picker or pass `--timer`. BurrowTime marks the session
+`manually_stopped`, and a later agent stop succeeds without changing anything.
+
+A repository can provide defaults for direct agent commands in its nearest
+`.burrowtime.toml`:
+
+```toml
+[agent]
+project = "client portal"
+task = "PORTAL-42"
+repository = "portal-app"
+lease = "30m"
+task_from_branch = false
+```
+
+Set `task_from_branch = true` to infer ticket-shaped values such as
+`PORTAL-42` from the current Git branch when `task` is omitted. Explicit flags
+take precedence. The bundled skill itself asks the user when the project or
+task was not supplied, so repository defaults do not turn tracking on.
+
+Use `burrowtime capabilities --json` to inspect the supported agent protocol,
+MCP version, skill targets, session states, and individual features.
+
 ### Command overview
 
 | Command | Purpose |
@@ -216,7 +326,10 @@ each project and to the combined total.
 | `config` | Read or update Watson-compatible settings |
 | `sync` | Synchronize with a Watson-compatible server |
 | `migrate` | Copy data between BurrowTime and Watson |
-| `skill` | Install bundled agent skills |
+| `agent` | Control and report agent-owned sessions |
+| `capabilities` | Show the machine-readable agent protocol |
+| `mcp` | Run the BurrowTime MCP server over stdio |
+| `skill` | Install and diagnose bundled agent skills |
 | `completion` | Generate shell completion scripts |
 
 ### TUI controls
@@ -286,6 +399,7 @@ against Python Watson as a black-box oracle. BurrowTime-specific features are
 kept outside that core format:
 
 - concurrent timers live in the additive `active_timers` file;
+- agent ownership and leases live in the additive `agent_sessions` file;
 - the first running timer remains in the compatible `state` file;
 - completed concurrent timers become ordinary Watson frames;
 - the Bubble Tea UI calls the same command and reporting implementation as the

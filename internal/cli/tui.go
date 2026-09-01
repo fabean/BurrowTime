@@ -98,6 +98,9 @@ var tuiRangeNames = []string{"Today", "Week", "Month", "Year", "All time"}
 
 func newDashboardModel(dir string) dashboardModel {
 	s, err := watson.Open(dir)
+	if err == nil {
+		_, err = s.RecoverExpiredAgentSessions()
+	}
 	now := time.Now()
 	if s != nil {
 		now = s.Now()

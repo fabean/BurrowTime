@@ -17,12 +17,13 @@ import (
 )
 
 type Service struct {
-	Repo       *store.Repository
-	Config     *config.Config
-	Now        func() time.Time
-	Frames     []store.Frame
-	State      store.State
-	Concurrent []store.ActiveTimer
+	Repo          *store.Repository
+	Config        *config.Config
+	Now           func() time.Time
+	Frames        []store.Frame
+	State         store.State
+	Concurrent    []store.ActiveTimer
+	AgentSessions []store.AgentSession
 }
 
 const PrimaryTimerID = "primary"
@@ -64,7 +65,11 @@ func OpenData(dir string) (*Service, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Service{Repo: repo, Config: config.New(), Frames: frames, State: state, Concurrent: concurrent, Now: now}, nil
+	agentSessions, err := repo.LoadAgentSessions()
+	if err != nil {
+		return nil, err
+	}
+	return &Service{Repo: repo, Config: config.New(), Frames: frames, State: state, Concurrent: concurrent, AgentSessions: agentSessions, Now: now}, nil
 }
 
 func (s *Service) LoadConfig() error {
@@ -199,6 +204,10 @@ func (s *Service) Stop(at *time.Time) (store.Frame, error) {
 // StopTimer stops one primary or concurrent timer. ID prefixes are accepted as
 // long as they identify exactly one running timer.
 func (s *Service) StopTimer(ref string, at *time.Time) (store.Frame, error) {
+	return s.stopTimer(ref, at, "", store.AgentSessionManuallyStopped)
+}
+
+func (s *Service) stopTimer(ref string, at *time.Time, sessionID string, status store.AgentSessionStatus) (store.Frame, error) {
 	timer, index, err := s.resolveTimer(ref)
 	if err != nil {
 		return store.Frame{}, err
@@ -217,9 +226,11 @@ func (s *Service) StopTimer(ref string, at *time.Time) (store.Frame, error) {
 	}
 	concurrent := append([]store.ActiveTimer(nil), s.Concurrent...)
 	state := s.State
+	promotedTimerID := ""
 	if index < 0 {
 		state = store.State{}
 		if len(concurrent) > 0 {
+			promotedTimerID = concurrent[0].ID
 			state = concurrent[0].State()
 			concurrent = concurrent[1:]
 		}
@@ -234,7 +245,16 @@ func (s *Service) StopTimer(ref string, at *time.Time) (store.Frame, error) {
 			return store.Frame{}, err
 		}
 	}
-	s.Frames, s.State, s.Concurrent = frames, state, concurrent
+	sessions, sessionsChanged, sessionErr := stoppedAgentSessions(s.AgentSessions, timer.ID, promotedTimerID, frame, stop.Unix(), sessionID, status)
+	if sessionErr != nil {
+		return store.Frame{}, sessionErr
+	}
+	if sessionsChanged {
+		if err := s.Repo.SaveAgentSessions(sessions); err != nil {
+			return store.Frame{}, err
+		}
+	}
+	s.Frames, s.State, s.Concurrent, s.AgentSessions = frames, state, concurrent, sessions
 	return frame, nil
 }
 
@@ -269,7 +289,21 @@ func (s *Service) StopAll(at *time.Time) ([]store.Frame, error) {
 			return nil, err
 		}
 	}
-	s.Frames, s.State, s.Concurrent = frames, store.State{}, []store.ActiveTimer{}
+	sessions := append([]store.AgentSession(nil), s.AgentSessions...)
+	sessionsChanged := false
+	for i, timer := range timers {
+		updated, changed, updateErr := stoppedAgentSessions(sessions, timer.ID, "", stopped[i], stop.Unix(), "", store.AgentSessionManuallyStopped)
+		if updateErr != nil {
+			return nil, updateErr
+		}
+		sessions, sessionsChanged = updated, sessionsChanged || changed
+	}
+	if sessionsChanged {
+		if err := s.Repo.SaveAgentSessions(sessions); err != nil {
+			return nil, err
+		}
+	}
+	s.Frames, s.State, s.Concurrent, s.AgentSessions = frames, store.State{}, []store.ActiveTimer{}, sessions
 	return stopped, nil
 }
 
@@ -345,7 +379,9 @@ func (s *Service) Cancel() (store.State, error) {
 	old := s.State
 	state := store.State{}
 	concurrent := append([]store.ActiveTimer(nil), s.Concurrent...)
+	promotedTimerID := ""
 	if len(concurrent) > 0 {
+		promotedTimerID = concurrent[0].ID
 		state = concurrent[0].State()
 		concurrent = concurrent[1:]
 	}
@@ -357,7 +393,13 @@ func (s *Service) Cancel() (store.State, error) {
 			return store.State{}, err
 		}
 	}
-	s.State, s.Concurrent = state, concurrent
+	sessions, changed := canceledAgentSessions(s.AgentSessions, PrimaryTimerID, promotedTimerID, s.Now().Unix())
+	if changed {
+		if err := s.Repo.SaveAgentSessions(sessions); err != nil {
+			return store.State{}, err
+		}
+	}
+	s.State, s.Concurrent, s.AgentSessions = state, concurrent, sessions
 	return old, nil
 }
 

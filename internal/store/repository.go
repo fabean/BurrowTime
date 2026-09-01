@@ -20,6 +20,11 @@ type activeTimersDocument struct {
 	Timers  []ActiveTimer `json:"timers"`
 }
 
+type agentSessionsDocument struct {
+	Version  int            `json:"version"`
+	Sessions []AgentSession `json:"sessions"`
+}
+
 func WatsonDir() (string, error) {
 	if dir := os.Getenv("WATSON_DIR"); dir != "" {
 		return dir, nil
@@ -129,6 +134,27 @@ func (r *Repository) LoadActiveTimers() ([]ActiveTimer, error) {
 	return document.Timers, nil
 }
 
+// LoadAgentSessions reads BurrowTime's agent-only companion metadata. It does
+// not alter Watson's frames or state formats.
+func (r *Repository) LoadAgentSessions() ([]AgentSession, error) {
+	document := agentSessionsDocument{Version: 1, Sessions: []AgentSession{}}
+	if err := readJSON(r.path("agent_sessions"), &document); err != nil {
+		return nil, err
+	}
+	if document.Version != 0 && document.Version != 1 {
+		return nil, fmt.Errorf("unsupported agent_sessions version %d", document.Version)
+	}
+	for i := range document.Sessions {
+		if document.Sessions[i].Tags == nil {
+			document.Sessions[i].Tags = []string{}
+		}
+		if document.Sessions[i].FrameIDs == nil {
+			document.Sessions[i].FrameIDs = []string{}
+		}
+	}
+	return document.Sessions, nil
+}
+
 func (r *Repository) LoadLastSync() (int64, error) {
 	var value int64
 	return value, readJSON(r.path("last_sync"), &value)
@@ -156,6 +182,20 @@ func (r *Repository) SaveActiveTimers(timers []ActiveTimer) error {
 		}
 	}
 	return r.saveJSON("active_timers", activeTimersDocument{Version: 1, Timers: copyTimers})
+}
+
+func (r *Repository) SaveAgentSessions(sessions []AgentSession) error {
+	copySessions := make([]AgentSession, len(sessions))
+	copy(copySessions, sessions)
+	for i := range copySessions {
+		if copySessions[i].Tags == nil {
+			copySessions[i].Tags = []string{}
+		}
+		if copySessions[i].FrameIDs == nil {
+			copySessions[i].FrameIDs = []string{}
+		}
+	}
+	return r.saveJSON("agent_sessions", agentSessionsDocument{Version: 1, Sessions: copySessions})
 }
 
 func (r *Repository) SaveLastSync(value int64) error { return r.saveJSON("last_sync", value) }

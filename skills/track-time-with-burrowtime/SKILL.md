@@ -5,23 +5,46 @@ description: Track agent work in BurrowTime when the user explicitly asks to tra
 
 # Track time with BurrowTime
 
-Start a timer only after the user explicitly asks to track the current work with BurrowTime. Installing or loading this skill does not authorize automatic time tracking.
+Track only after the user explicitly asks to track, log, or clock the current work with BurrowTime. Installing or loading this skill does not authorize automatic tracking.
 
 ## Get the tracking details
 
-Require a BurrowTime project and at least one task or ticket tag. Preserve names and ticket spelling supplied by the user. Add the required `+` prefix to a tag when it is omitted.
+Require a BurrowTime project and a task or ticket. Preserve the spelling the user supplies. The agent-session command accepts the task with or without a leading `+`.
 
 If either value is missing, ask: "How do you want me to track your time? Please provide a BurrowTime project and task or ticket." Do not start a timer or begin substantive task work until the user answers.
 
+## Verify compatibility
+
+Before starting, use the `burrowtime_capabilities` MCP tool when available and read its `capabilities` object. Otherwise run `burrowtime capabilities --json` and read the top-level object.
+
+Require `agent_protocol` to be at least `1` and `features.agent_sessions` to be `true`. If the check fails, stop and tell the user to update the BurrowTime binary and run `burrowtime skill doctor <client>`. Never retry with `burrowtime start`, remove JSON flags, parse human output, or otherwise fall back to an older command.
+
+## Identify the client
+
+Use the host agent's lowercase name as the client, such as `codex`, `claude`, `cursor`, `gemini`, or `opencode`. Use `agent` only when the host cannot be identified. If the host exposes a stable conversation or run identifier, use it as both the owner and the basis of a stable idempotency key for this tracked task. Do not invent an identifier presented as a real host ID.
+
 ## Track the work
 
-1. Before substantive work, run `burrowtime start --concurrent --json <project> +<task>` with the project and each tag passed as separate, safely quoted arguments.
-2. Parse the JSON response and retain its `id` for this tracked work. If the command fails, tell the user that tracking did not start. Continue only if the user did not make successful tracking a condition of the work.
-3. Complete the requested work.
-4. Before the final response, or before abandoning or replacing the task, run `burrowtime stop --timer <id>` using the retained ID.
+Prefer the BurrowTime MCP tools when available:
 
-Always stop the recorded timer. Never use a bare `burrowtime stop`, `burrowtime stop --all`, or a timer selected only by project or tag. Do not stop timers that this agent did not start.
+1. Call `start_time` with `client`, `project`, `task`, a `30m` lease, and optional owner and idempotency metadata.
+2. Retain the exact `session.id` returned for this work.
+3. Call `heartbeat_time` with that session ID before its lease expires during long uninterrupted work.
+4. Call `pause_time` before waiting for required user input. Call `resume_time` with the same session ID when the work continues.
+5. Call `stop_time` with the exact session ID before the final response, or before abandoning or replacing the task.
 
-If work must pause for required user input, stop the timer before asking. When the user responds and the same tracked task resumes, start a new timer with the same project and tags before continuing.
+When MCP tools are unavailable, use their CLI equivalents with safely quoted arguments:
 
-If stopping fails, report the timer ID and error so the user can resolve the running timer manually.
+```sh
+burrowtime agent start --client <client> --project <project> --task <task> --lease 30m --json
+burrowtime agent heartbeat --session <session-id> --json
+burrowtime agent pause --session <session-id> --json
+burrowtime agent resume --session <session-id> --json
+burrowtime agent stop --session <session-id> --json
+```
+
+Include `--owner` and `--idempotency-key` on `agent start` when stable identifiers are available. Parse the JSON response and retain `session.id`.
+
+Agent sessions use ordinary BurrowTime timers. A user may stop one manually with the normal `burrowtime stop` flow. A later agent stop is idempotent and should be treated as success when the session is already terminal.
+
+Never use bare `burrowtime stop`, `burrowtime stop --all`, or a timer selected only by project or tag on the agent's behalf. Do not stop or modify sessions this agent did not start. If an operation fails, report the session ID and error so the user can resolve it.

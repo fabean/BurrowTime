@@ -28,6 +28,8 @@ const WatsonVersion = "2.1.0"
 type app struct {
 	dir                    string
 	name                   string
+	homeDir                string
+	capabilitiesProbe      func() ([]byte, error)
 	in                     *os.File
 	out, errOut            *os.File
 	colorFlag, noColorFlag bool
@@ -460,7 +462,7 @@ func (a *app) root() *cobra.Command {
 					stylingEnabled = term.IsTerminal(int(file.Fd()))
 				}
 			}
-			if a.name == "burrowtime" && !commandBelongsTo(cmd, "migrate") && !commandBelongsTo(cmd, "skill") {
+			if a.name == "burrowtime" && !commandBelongsTo(cmd, "migrate") && !commandBelongsTo(cmd, "skill") && !commandBelongsTo(cmd, "capabilities") && !commandBelongsTo(cmd, "mcp") {
 				customDir := cmd.Flags().Changed("data-dir") || cmd.Flags().Changed("watson-dir")
 				if !customDir {
 					in, inOK := cmd.InOrStdin().(*os.File)
@@ -513,7 +515,7 @@ func (a *app) root() *cobra.Command {
 	root.AddCommand(a.rename(), a.config())
 	root.AddCommand(a.edit(), a.merge(), a.sync())
 	if a.name != "watson" {
-		root.AddCommand(a.migrate(), a.skill())
+		root.AddCommand(a.migrate(), a.skill(), a.agent(), a.capabilities(), a.mcp())
 	}
 	return root
 }
@@ -658,6 +660,11 @@ func (a *app) start() *cobra.Command {
 		s, err := a.open()
 		if err != nil {
 			return err
+		}
+		if a.name != "watson" {
+			if _, err := s.RecoverExpiredAgentSessions(); err != nil {
+				return err
+			}
 		}
 		project, tags := parseProjectTags(args)
 		if project == "" {
@@ -812,6 +819,11 @@ func (a *app) stop() *cobra.Command {
 		if err != nil {
 			return err
 		}
+		if a.name != "watson" {
+			if _, err := s.RecoverExpiredAgentSessions(); err != nil {
+				return err
+			}
+		}
 		var when *time.Time
 		if at != "" {
 			parsed, e := parseTime(at, s.Now())
@@ -905,6 +917,11 @@ func (a *app) status() *cobra.Command {
 		s, err := a.openData()
 		if err != nil {
 			return err
+		}
+		if a.name != "watson" {
+			if _, err := s.RecoverExpiredAgentSessions(); err != nil {
+				return err
+			}
 		}
 		timers := s.RunningTimers()
 		if len(timers) == 0 {
