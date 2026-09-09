@@ -1,0 +1,40 @@
+name: Bug report
+description: Report behavior that is broken or unsafe.
+title: "bug: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: Thanks for taking the time to report a problem. Remove private paths and time data before posting.
+  - type: input
+    id: version
+    attributes:
+      label: BurrowTime version
+      description: Paste the output of `burrowtime --version`.
+    validations:
+      required: true
+  - type: input
+    id: platform
+    attributes:
+      label: Operating system and terminal
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: What happened?
+      description: Include the command, expected result, and actual result.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Reproduction
+      description: Give the smallest repeatable steps using a temporary data directory when possible.
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Add sanitized logs or screenshots if they help.

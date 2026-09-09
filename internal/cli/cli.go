@@ -515,7 +515,7 @@ func (a *app) root() *cobra.Command {
 	root.AddCommand(a.rename(), a.config())
 	root.AddCommand(a.edit(), a.merge(), a.sync())
 	if a.name != "watson" {
-		root.AddCommand(a.migrate(), a.skill(), a.agent(), a.capabilities(), a.mcp())
+		root.AddCommand(a.migrate(), a.skill(), a.agent(), a.capabilities(), a.mcp(), a.clockify())
 	}
 	return root
 }

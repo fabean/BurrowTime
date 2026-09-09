@@ -4,23 +4,33 @@
   <img src="assets/burrowtime-mascot.png" alt="BurrowTime gopher mascot holding a pocket watch beside a terminal in its burrow" width="360">
 </p>
 
-**Local time tracking for you and your coding agents, with a friendly terminal
-UI and Watson-compatible commands and data.**
+**Open-source time tracking for coding agents and developers. Local files, a
+friendly terminal UI, and Watson-compatible commands and data.**
 
 [![Go](https://img.shields.io/badge/Go-1.24%2B-00ADD8?logo=go&logoColor=white)](https://go.dev/)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Latest release](https://img.shields.io/github/v/release/fabean/BurrowTime?display_name=tag&sort=semver)](https://github.com/fabean/BurrowTime/releases/latest)
 
-BurrowTime is a Go port of [Watson](https://github.com/jazzband/Watson), the
-command-line time tracker. It adds an interactive Bubble Tea dashboard while
-preserving Watson's commands and on-disk format. Existing Watson users can
-copy their history into BurrowTime on first launch and move it back later—no
-conversion, account, or hosted service is required.
+[Website](https://fabean.github.io/burrowtime-site/) ·
+[Agent setup](https://fabean.github.io/burrowtime-site/docs/agent-time-tracking/) ·
+[Documentation](https://fabean.github.io/burrowtime-site/docs/) ·
+[Releases](https://github.com/fabean/BurrowTime/releases)
 
-BurrowTime also gives coding agents a safe way to track the work you explicitly
-ask them to perform. Agent sessions use the same local timers and reports you
-use yourself, with exact ownership, retry protection, leases for interrupted
-work, and integrations for popular coding agents and MCP clients.
+BurrowTime is a local-first time tracker for people and coding agents. Codex,
+Claude Code, Cursor, Gemini CLI, OpenCode, and MCP clients can track only the
+work you explicitly request. Agent sessions have exact ownership, safe retries,
+leases for interrupted work, and pause or resume support. Your time stays in
+ordinary files on your machine.
+
+It is also a Go port of [Watson](https://github.com/jazzband/Watson), the
+command-line time tracker. BurrowTime adds an interactive Bubble Tea dashboard
+while preserving Watson's commands and on-disk format. Existing Watson users
+can copy their history into BurrowTime on first launch and move it back later.
+No conversion, account, or hosted service is required.
+
+<p align="center">
+  <img src="assets/burrowtime-tui.gif" alt="BurrowTime terminal UI moving through a weekly report and filtering recorded time" width="900">
+</p>
 
 ```console
 $ burrowtime start "client portal" +review
@@ -34,6 +44,30 @@ Mon 17 August 2026 -> Mon 17 August 2026
 
 client portal - 2h 14m 08s
 ```
+
+## Track coding-agent time in one minute
+
+Install the bundled skill for your agent, check the setup, then name a project
+and task in your prompt:
+
+```bash
+burrowtime skill install codex
+burrowtime skill doctor codex
+```
+
+```text
+Track this work in BurrowTime under "client portal" +PORTAL-42.
+```
+
+<p align="center">
+  <img src="assets/burrowtime-agent.gif" alt="BurrowTime creating, pausing, resuming, stopping, and reporting an owned Codex time-tracking session" width="900">
+</p>
+
+The agent starts an owned local timer, renews its lease during long work,
+pauses when it must wait for required input, and stops that exact session at
+the end. It cannot silently start tracking, and it never needs to stop your
+other timers. See the [agent time tracking guide](docs/AGENT_TIME_TRACKING.md)
+for every supported client, MCP setup, repository defaults, and protocol rules.
 
 ## Why BurrowTime?
 
@@ -348,6 +382,41 @@ MCP version, skill targets, session states, and individual features.
 
 Mouse-wheel scrolling also works in the Log and Report views.
 
+## Export time to Clockify
+
+Install the optional `burrowtime-clockify` executable alongside BurrowTime.
+Clockify support is currently on `main`, not in the latest tagged release:
+
+```bash
+go install github.com/fabean/BurrowTime/cmd/burrowtime@main
+go install github.com/fabean/BurrowTime/cmd/burrowtime-clockify@main
+```
+
+Configure a workspace and user using `CLOCKIFY_WORKSPACE_ID`,
+`CLOCKIFY_USER_ID`, and `CLOCKIFY_API_KEY`, then run:
+
+```bash
+burrowtime clockify configure --rounding up --increment 15m
+burrowtime clockify sync --today --dry-run
+burrowtime clockify sync --today
+```
+
+Sync suggests Clockify projects for unmapped local projects and shows their
+clients so similarly named projects are distinguishable. Search, select a
+mapping, then review and edit descriptions, destinations, durations, and
+billable settings before confirming the upload. Rounding applies to each completed entry;
+local times stay exact. Local receipts remember successful uploads so reruns
+skip them. Uncertain uploads require reconciliation before retrying.
+
+Descriptions contain only your tags: `burrowtime start sema +SEMA-123`
+exports `SEMA-123`, without the project name, `+`, or an internal tracking ID.
+Multiple tags are sorted and space-separated; entries without tags have an
+empty description unless you edit it. Named connections let you route local
+projects to different Clockify workspaces. Nothing syncs in the background.
+
+See [Clockify setup, mapping, and recovery](docs/CLOCKIFY.md) for installation
+from this checkout, configuration, dry-run, and unattended sync.
+
 ## Logs, reports, and filters
 
 Use a shortcut range or explicit dates:
@@ -509,7 +578,7 @@ burrowtime_test_dir="$(mktemp -d)"
 BURROWTIME_DIR="$burrowtime_test_dir" go run ./cmd/burrowtime
 ```
 
-The single-file spelling also works—`go run cmd/burrowtime/main.go`—but the
+The single-file spelling also works: `go run cmd/burrowtime/main.go`. The
 package form above is the conventional choice.
 
 Run the project checks with:
@@ -531,7 +600,7 @@ To inspect release artifacts without publishing them:
 goreleaser release --snapshot --clean
 ```
 
-See [PORTING_PLAN.md](PORTING_PLAN.md) for the compatibility strategy and
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the development workflow and
 [docs/DISTRIBUTION.md](docs/DISTRIBUTION.md) for release maintenance.
 
 ## License

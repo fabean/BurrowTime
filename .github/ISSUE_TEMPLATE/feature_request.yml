@@ -1,0 +1,36 @@
+name: Feature request
+description: Suggest a focused improvement to BurrowTime.
+title: "feature: "
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem would this solve?
+      description: Describe the workflow that is hard today.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+      description: Show an example command or interaction when useful.
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Agent time tracking
+        - CLI
+        - Terminal UI
+        - Watson compatibility
+        - Documentation
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Share workarounds or related tools you have tried.
