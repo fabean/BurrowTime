@@ -226,9 +226,9 @@ variable. Plugins run as the local user and should only be installed from truste
 sources.
 
 The core owns mappings, rounding, review, locking, and receipts. The executable
-owns HTTP translation. Only Clockify is registered in this first version; adding
-another provider requires registering its command and adapter contract. Jira and
-Tempo are not part of this connector.
+owns HTTP translation. Clockify and Timetable are registered; each has its own
+command and adapter. See [Timetable setup](TIMETABLE.md) for that connector.
+Jira and Tempo are not part of this connector.
 
 The implementation uses the [Clockify API](https://docs.clockify.me/), with
 `X-Api-Key`, `/user`, paginated workspace projects, and completed time entries.

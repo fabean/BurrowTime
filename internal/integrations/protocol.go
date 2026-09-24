@@ -45,6 +45,7 @@ func (r Rounding) Seconds(seconds int64) (int64, error) {
 
 type Connection struct {
 	Plugin      string   `json:"plugin"`
+	BaseURL     string   `json:"base_url,omitempty"`
 	WorkspaceID string   `json:"workspace_id"`
 	UserID      string   `json:"user_id"`
 	APIKeyEnv   string   `json:"api_key_env"`
@@ -59,9 +60,19 @@ type Mapping struct {
 }
 
 type Config struct {
-	Version     int                   `json:"version"`
-	Connections map[string]Connection `json:"connections"`
-	Projects    map[string]Mapping    `json:"projects"`
+	Version     int                           `json:"version"`
+	Connections map[string]Connection         `json:"connections"`
+	Projects    map[string]Mapping            `json:"projects"`
+	Routes      map[string]map[string]Mapping `json:"routes,omitempty"`
+}
+
+func (c Config) Mapping(connection, project string) (Mapping, bool) {
+	if routes := c.Routes[connection]; routes != nil {
+		m, ok := routes[project]
+		return m, ok
+	}
+	m, ok := c.Projects[project]
+	return m, ok && m.Connection == connection
 }
 
 // Entry is an export projection, never a replacement for a local frame.
@@ -95,6 +106,7 @@ type Request struct {
 	Operation  string     `json:"operation"`
 	Connection Connection `json:"connection"`
 	Entry      Entry      `json:"entry,omitempty"`
+	FrameID    string     `json:"frame_id,omitempty"`
 	RemoteID   string     `json:"remote_id,omitempty"`
 }
 
@@ -112,12 +124,12 @@ type Caller func(context.Context, Request) (Response, error)
 // Call executes an explicitly selected connector, never a shell command. Keys
 // are read by the connector from the named environment variable, not serialized.
 func Call(ctx context.Context, request Request) (Response, error) {
-	if request.Connection.Plugin != "clockify" {
+	if request.Connection.Plugin != "clockify" && request.Connection.Plugin != "timetable" {
 		return Response{}, fmt.Errorf("unsupported connector %q", request.Connection.Plugin)
 	}
 	path, err := exec.LookPath("burrowtime-" + request.Connection.Plugin)
 	if err != nil {
-		return Response{}, fmt.Errorf("install the optional connector: go install github.com/fabean/BurrowTime/cmd/burrowtime-clockify@latest")
+		return Response{}, fmt.Errorf("install the optional connector: go install github.com/fabean/BurrowTime/cmd/burrowtime-%s@latest", request.Connection.Plugin)
 	}
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()

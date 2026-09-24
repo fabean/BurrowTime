@@ -19,6 +19,7 @@ type exportPrompter struct {
 	out      io.Writer
 	projects []integrations.Project
 	dryRun   bool
+	provider string
 	run      func(clockifyModel) (clockifyModel, error)
 }
 
@@ -86,7 +87,9 @@ func (p *exportPrompter) mapMissing(config *integrations.Config, frames []store.
 		if (!opts.From.IsZero() && start.Before(opts.From)) || (!opts.To.IsZero() && !start.Before(opts.To)) {
 			continue
 		}
-		if _, ok := config.Projects[f.Project]; !ok {
+		_, mapped := config.Mapping(opts.Connection, f.Project)
+		_, legacyMapped := config.Projects[f.Project]
+		if !mapped && !(p.provider != "Timetable" && legacyMapped) {
 			names[f.Project] = true
 		}
 	}
@@ -106,7 +109,18 @@ func (p *exportPrompter) mapMissing(config *integrations.Config, frames []store.
 			fmt.Fprintf(p.out, "Skipping %q for this run.\n", name)
 			continue
 		}
-		config.Projects[name] = integrations.Mapping{Connection: opts.Connection, ProjectID: id}
+		mapping := integrations.Mapping{Connection: opts.Connection, ProjectID: id}
+		if p.provider == "Timetable" {
+			if config.Routes == nil {
+				config.Routes = map[string]map[string]integrations.Mapping{}
+			}
+			if config.Routes[opts.Connection] == nil {
+				config.Routes[opts.Connection] = map[string]integrations.Mapping{}
+			}
+			config.Routes[opts.Connection][name] = mapping
+		} else {
+			config.Projects[name] = mapping
+		}
 	}
 	return nil
 }
@@ -128,6 +142,9 @@ func (p *exportPrompter) start(m clockifyModel) (clockifyModel, error) {
 
 func (p *exportPrompter) chooseProject(local string) (string, error) {
 	m := newClockifyModel(p.projects)
+	if p.provider != "" {
+		m.provider = p.provider
+	}
 	m.local = local
 	m.dryRun = p.dryRun
 	m.screen = clockifyPicker
@@ -140,6 +157,9 @@ func (p *exportPrompter) chooseProject(local string) (string, error) {
 
 func (p *exportPrompter) review(queue []integrations.Receipt) ([]integrations.Receipt, error) {
 	m := newClockifyModel(p.projects)
+	if p.provider != "" {
+		m.provider = p.provider
+	}
 	m.screen = clockifyReview
 	m.queue = append([]integrations.Receipt(nil), queue...)
 	m.dryRun = p.dryRun

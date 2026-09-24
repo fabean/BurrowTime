@@ -23,6 +23,7 @@ const (
 )
 
 type clockifyModel struct {
+	provider                                      string
 	projects                                      []integrations.Project
 	queue                                         []integrations.Receipt
 	screen                                        clockifyScreen
@@ -32,7 +33,7 @@ type clockifyModel struct {
 }
 
 func newClockifyModel(projects []integrations.Project) clockifyModel {
-	return clockifyModel{projects: append([]integrations.Project(nil), projects...), width: 90, height: 28}
+	return clockifyModel{provider: "Clockify", projects: append([]integrations.Project(nil), projects...), width: 90, height: 28}
 }
 func (m clockifyModel) Init() tea.Cmd { return nil }
 
@@ -197,7 +198,9 @@ func (m clockifyModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.field = "duration"
 				m.input = (time.Duration(m.queue[m.cursor].ExportSeconds) * time.Second).String()
 			case "b":
-				m.queue[m.cursor].Entry.Billable = !m.queue[m.cursor].Entry.Billable
+				if m.provider == "Clockify" {
+					m.queue[m.cursor].Entry.Billable = !m.queue[m.cursor].Entry.Billable
+				}
 			}
 		case clockifyConfirm:
 			switch key {
@@ -271,7 +274,7 @@ func (m clockifyModel) View() string {
 	}
 	w := min(110, m.width-4)
 	inner := w - 4
-	brand := tuiBrandStyle.Render("◷  BURROWTIME") + tuiMutedStyle.Render("  /  ") + tuiTitleStyle.Render("Clockify")
+	brand := tuiBrandStyle.Render("◷  BURROWTIME") + tuiMutedStyle.Render("  /  ") + tuiTitleStyle.Render(m.provider)
 	label := "PROJECT MAPPING"
 	if m.screen != clockifyPicker {
 		label = "REVIEW EXPORT"
@@ -284,7 +287,7 @@ func (m clockifyModel) View() string {
 	switch m.screen {
 	case clockifyPicker:
 		projects := m.filtered()
-		context := tuiTagStyle.Render(clockifyClip(m.local, inner)) + "\n" + tuiMutedStyle.Render("Choose its Clockify destination")
+		context := tuiTagStyle.Render(clockifyClip(m.local, inner)) + "\n" + tuiMutedStyle.Render("Choose its "+m.provider+" destination")
 		search := "/ Search projects"
 		if m.query != "" || m.searching {
 			search = "/ " + m.query
@@ -363,9 +366,11 @@ func (m clockifyModel) View() string {
 			tuiBrandStyle.Render("p  ") + "Project     " + clockifyClip(m.projectName(r.Entry.ProjectID), inner-15),
 			tuiBrandStyle.Render("d  ") + "Description " + clockifyClip(m.description(r), inner-15),
 			tuiBrandStyle.Render("t  ") + "Duration    " + tuiTimeStyle.Render(formatDuration(r.ExportSeconds)),
-			tuiBrandStyle.Render("b  ") + fmt.Sprintf("Billable    %t", r.Entry.Billable), "",
-			tuiMutedStyle.Render(clockifyClip("Recorded: "+formatDuration(r.RecordedSeconds)+" · local data stays exact", inner)),
 		}
+		if m.provider == "Clockify" {
+			lines = append(lines, tuiBrandStyle.Render("b  ")+fmt.Sprintf("Billable    %t", r.Entry.Billable))
+		}
+		lines = append(lines, "", tuiMutedStyle.Render(clockifyClip("Recorded: "+formatDuration(r.RecordedSeconds)+" · local data stays exact", inner)))
 		body = tuiPanel("EDIT EXPORT", strings.Join(lines, "\n"), w)
 		if m.field != "" {
 			body += "\n" + tuiPanel(strings.ToUpper(m.field), tuiBrandStyle.Render(ansi.TruncateLeft(clockifySafe(m.input), max(1, inner-2), "…")+" ▏"), w)
@@ -373,7 +378,11 @@ func (m clockifyModel) View() string {
 		if m.message != "" {
 			body += "\n" + tuiMutedStyle.Render(clockifyClip(m.message, w))
 		}
-		help = tuiHelp("p/d/t/b", "edit field", "enter/esc", "back", "q", "cancel")
+		keys := "p/d/t"
+		if m.provider == "Clockify" {
+			keys += "/b"
+		}
+		help = tuiHelp(keys, "edit field", "enter/esc", "back", "q", "cancel")
 		if m.field != "" {
 			help = tuiHelp("enter", "save", "ctrl+u", "clear", "esc", "discard")
 		}
@@ -382,7 +391,7 @@ func (m clockifyModel) View() string {
 		for _, r := range m.queue {
 			seconds += r.ExportSeconds
 		}
-		body = tuiPanel("CONFIRM UPLOAD", tuiTitleStyle.Render(fmt.Sprintf("Push %d entries to Clockify?", len(m.queue)))+"\n\n"+tuiTimeStyle.Render(formatDuration(seconds))+"\n\n"+tuiMutedStyle.Render("This creates real Clockify time entries."), w)
+		body = tuiPanel("CONFIRM UPLOAD", tuiTitleStyle.Render(fmt.Sprintf("Push %d entries to %s?", len(m.queue), m.provider))+"\n\n"+tuiTimeStyle.Render(formatDuration(seconds))+"\n\n"+tuiMutedStyle.Render("This creates real "+m.provider+" time entries."), w)
 		help = tuiHelp("y", "confirm push", "esc/n", "back", "q", "cancel")
 	}
 	// Wrap help without widening a small terminal. Each panel remains bounded.

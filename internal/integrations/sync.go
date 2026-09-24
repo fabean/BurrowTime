@@ -22,11 +22,26 @@ type Options struct {
 	SkipProjects map[string]bool
 }
 
-func target(c Connection) string { return c.Plugin + ":" + c.WorkspaceID + ":" + c.UserID }
+func target(c Connection) string {
+	if c.Plugin == "timetable" {
+		return c.Plugin + ":" + strings.TrimRight(c.BaseURL, "/") + ":" + c.UserID
+	}
+	return c.Plugin + ":" + c.WorkspaceID + ":" + c.UserID
+}
+
+func receiptKey(c Connection, name, frameID string) string {
+	if c.Plugin == "clockify" {
+		return frameID // Keep existing Clockify receipts readable.
+	}
+	return name + ":" + frameID
+}
 
 func Projection(f store.Frame, name string, c Connection, m Mapping) (Receipt, error) {
 	if f.ID == "" || f.IDNull {
 		return Receipt{}, fmt.Errorf("entry has no stable ID")
+	}
+	if c.Plugin == "timetable" && len(f.ID) > 128 {
+		return Receipt{}, fmt.Errorf("frame ID exceeds Timetable's 128-character external ID limit")
 	}
 	if f.Stop == nil || *f.Stop <= f.Start {
 		return Receipt{}, fmt.Errorf("entry has no positive completed duration")
@@ -55,7 +70,7 @@ func Projection(f store.Frame, name string, c Connection, m Mapping) (Receipt, e
 		tags[i] = strings.TrimPrefix(tag, "+")
 	}
 	description := strings.Join(tags, " ")
-	if len([]rune(description)) > 3000 {
+	if c.Plugin == "clockify" && len([]rune(description)) > 3000 {
 		return Receipt{}, fmt.Errorf("description exceeds Clockify's 3000-character limit")
 	}
 	entry := Entry{Start: time.Unix(f.Start, 0).UTC().Format(time.RFC3339), End: time.Unix(f.Start+rounded, 0).UTC().Format(time.RFC3339), ProjectID: m.ProjectID, Description: description, Billable: m.Billable}
@@ -98,11 +113,17 @@ func matchesFingerprint(old Receipt, current Receipt, c Connection, m Mapping, f
 }
 
 func ValidateConnection(c Connection) error {
-	if c.Plugin != "clockify" {
-		return fmt.Errorf("only the clockify connector is currently supported")
+	if c.Plugin != "clockify" && c.Plugin != "timetable" {
+		return fmt.Errorf("unsupported connector %q", c.Plugin)
 	}
-	if strings.TrimSpace(c.WorkspaceID) == "" || strings.TrimSpace(c.UserID) == "" || strings.TrimSpace(c.APIKeyEnv) == "" {
+	if strings.TrimSpace(c.APIKeyEnv) == "" {
+		return fmt.Errorf("API key environment variable is required")
+	}
+	if c.Plugin == "clockify" && (strings.TrimSpace(c.WorkspaceID) == "" || strings.TrimSpace(c.UserID) == "") {
 		return fmt.Errorf("workspace ID, user ID, and API key environment variable are required")
+	}
+	if c.Plugin == "timetable" && (strings.TrimSpace(c.BaseURL) == "" || strings.TrimSpace(c.UserID) == "") {
+		return fmt.Errorf("Timetable URL and user ID are required")
 	}
 	_, err := c.Rounding.Seconds(1)
 	return err
@@ -141,7 +162,12 @@ func Sync(ctx context.Context, dir string, config Config, frames []store.Frame, 
 		if (!opts.From.IsZero() && start.Before(opts.From)) || (!opts.To.IsZero() && !start.Before(opts.To)) {
 			continue
 		}
-		m, mapped := config.Projects[f.Project]
+		m, mapped := config.Mapping(opts.Connection, f.Project)
+		if !mapped && c.Plugin == "clockify" {
+			if _, exists := config.Projects[f.Project]; exists {
+				continue
+			}
+		}
 		if opts.SkipProjects[f.Project] {
 			continue
 		}
@@ -159,11 +185,13 @@ func Sync(ctx context.Context, dir string, config Config, frames []store.Frame, 
 		if err != nil {
 			return fmt.Errorf("project %q, frame %s: %w", f.Project, f.ID, err)
 		}
-		if old, exists := ledger.Records[f.ID]; exists {
+		if old, exists := ledger.Records[receiptKey(c, opts.Connection, f.ID)]; exists {
 			switch {
 			case old.Target != r.Target:
 				fmt.Fprintf(out, "BLOCKED %s: previously exported or attempted for another destination\n", f.ID)
 				blocked++
+			case old.Status == "pending" && c.Plugin == "timetable" && old.Fingerprint == r.Fingerprint:
+				queue = append(queue, old)
 			case old.Status == "pending":
 				fmt.Fprintf(out, "BLOCKED %s: earlier upload outcome is uncertain; reconcile it before retrying\n", f.ID)
 				blocked++
@@ -211,7 +239,7 @@ func Sync(ctx context.Context, dir string, config Config, frames []store.Frame, 
 			return err
 		}
 		if response.UserID != c.UserID {
-			return fmt.Errorf("API key belongs to another Clockify user")
+			return fmt.Errorf("connector token belongs to another user")
 		}
 		projects, err := call(ctx, Request{Version: 1, Operation: "projects", Connection: c})
 		if err != nil {
@@ -223,16 +251,20 @@ func Sync(ctx context.Context, dir string, config Config, frames []store.Frame, 
 		}
 		for _, r := range queue {
 			if !ids[r.Entry.ProjectID] {
-				return fmt.Errorf("Clockify project %s is not accessible; fix the mapping before syncing", r.Entry.ProjectID)
+				return fmt.Errorf("%s project %s is not accessible; fix the mapping before syncing", c.Plugin, r.Entry.ProjectID)
 			}
 		}
 		for _, r := range queue {
-			ledger.Records[r.FrameID] = r
+			key := receiptKey(c, opts.Connection, r.FrameID)
+			ledger.Records[key] = r
 			if err := SaveLedger(dir, ledger); err != nil {
 				return err
 			}
-			response, err := call(ctx, Request{Version: 1, Operation: "create", Connection: c, Entry: r.Entry})
+			response, err := call(ctx, Request{Version: 1, Operation: "create", Connection: c, Entry: r.Entry, FrameID: r.FrameID})
 			if err != nil {
+				if c.Plugin == "timetable" {
+					return fmt.Errorf("%d created; upload %s is pending; rerun sync to retry safely: %w", created, r.FrameID, err)
+				}
 				return fmt.Errorf("%d created; upload %s is recorded as pending and will not be repeated automatically: %w", created, r.FrameID, err)
 			}
 			if response.RemoteID == "" {
@@ -241,7 +273,7 @@ func Sync(ctx context.Context, dir string, config Config, frames []store.Frame, 
 			r.RemoteID = response.RemoteID
 			r.Status = "synced"
 			r.SyncedAt = time.Now().UTC().Format(time.RFC3339)
-			ledger.Records[r.FrameID] = r
+			ledger.Records[key] = r
 			if err := SaveLedger(dir, ledger); err != nil {
 				return fmt.Errorf("remote entry %s created but receipt update failed; do not upload again: %w", r.RemoteID, err)
 			}
@@ -262,7 +294,8 @@ func Resolve(ctx context.Context, dir, name, id, remote string, c Connection, ca
 	if err != nil {
 		return err
 	}
-	r, ok := l.Records[id]
+	key := receiptKey(c, name, id)
+	r, ok := l.Records[key]
 	if !ok || r.Status != "pending" {
 		return fmt.Errorf("frame %s has no pending upload", id)
 	}
@@ -279,6 +312,6 @@ func Resolve(ctx context.Context, dir, name, id, remote string, c Connection, ca
 	r.RemoteID = remote
 	r.Status = "synced"
 	r.SyncedAt = time.Now().UTC().Format(time.RFC3339)
-	l.Records[id] = r
+	l.Records[key] = r
 	return SaveLedger(dir, l)
 }

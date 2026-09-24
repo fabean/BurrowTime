@@ -57,7 +57,8 @@ func LoadLedger(dir string) (Ledger, error) {
 		return l, fmt.Errorf("invalid integration-sync.json schema; refusing to risk duplicate uploads")
 	}
 	for id, r := range l.Records {
-		if id == "" || id != r.FrameID || r.Target == "" || r.Fingerprint == "" || (r.Status != "pending" && r.Status != "synced" && r.Status != "retryable") || (r.Status == "synced" && r.RemoteID == "") {
+		validKey := id == r.FrameID || id == r.Connection+":"+r.FrameID
+		if !validKey || r.Target == "" || r.Fingerprint == "" || (r.Status != "pending" && r.Status != "synced" && r.Status != "retryable") || (r.Status == "synced" && r.RemoteID == "") {
 			return l, fmt.Errorf("invalid sync receipt for %q; refusing to risk duplicate uploads", id)
 		}
 	}
@@ -129,7 +130,8 @@ func RetryPending(dir, name, id string, c Connection) error {
 	if err != nil {
 		return err
 	}
-	r, ok := l.Records[id]
+	key := receiptKey(c, name, id)
+	r, ok := l.Records[key]
 	if !ok || r.Status != "pending" {
 		return fmt.Errorf("frame has no pending upload")
 	}
@@ -137,7 +139,7 @@ func RetryPending(dir, name, id string, c Connection) error {
 		return fmt.Errorf("receipt belongs to another connection")
 	}
 	r.Status = "retryable"
-	l.Records[id] = r
+	l.Records[key] = r
 	return SaveLedger(dir, l)
 }
 

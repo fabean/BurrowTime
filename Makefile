@@ -1,4 +1,4 @@
-.PHONY: all build test vet clean install snapshot demos build-clockify install-clockify
+.PHONY: all build test vet clean install snapshot demos build-clockify install-clockify build-timetable install-timetable
 
 all: test build
 
@@ -23,6 +23,12 @@ build-clockify:
 
 install-clockify:
 	go install ./cmd/burrowtime-clockify
+
+build-timetable:
+	go build -o bin/burrowtime-timetable ./cmd/burrowtime-timetable
+
+install-timetable:
+	go install ./cmd/burrowtime-timetable
 
 snapshot:
 	goreleaser release --snapshot --clean

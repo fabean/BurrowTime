@@ -86,6 +86,49 @@ func TestSyncRoundsEachEntryAndSkipsSecondRun(t *testing.T) {
 	}
 }
 
+func TestTimetableCoexistsWithClockifyAndRetriesPending(t *testing.T) {
+	c, frames := fixture()
+	c.Connections["timetable"] = Connection{Plugin: "timetable", BaseURL: "https://timetable.example", UserID: "user", APIKeyEnv: "TIMETABLE_TOKEN", Rounding: Rounding{Mode: "off"}}
+	c.Routes = map[string]map[string]Mapping{"timetable": {"portal": {Connection: "timetable", ProjectID: "other-project"}}}
+	dir := t.TempDir()
+	creates := 0
+	if err := Sync(context.Background(), dir, c, frames, Options{Connection: "work"}, mockCall(&creates), io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	timetableCreates := 0
+	call := func(_ context.Context, r Request) (Response, error) {
+		switch r.Operation {
+		case "check":
+			return Response{UserID: "user"}, nil
+		case "projects":
+			return Response{Projects: []Project{{ID: "other-project"}}}, nil
+		case "create":
+			timetableCreates++
+			if r.FrameID != "frame-1" {
+				t.Fatalf("missing stable ID: %+v", r)
+			}
+			if timetableCreates == 1 {
+				return Response{}, errors.New("response lost")
+			}
+			return Response{RemoteID: "remote-timetable"}, nil
+		}
+		return Response{}, fmt.Errorf("unexpected operation %s", r.Operation)
+	}
+	if err := Sync(context.Background(), dir, c, frames, Options{Connection: "timetable"}, call, io.Discard); err == nil {
+		t.Fatal("expected uncertain result")
+	}
+	if err := Sync(context.Background(), dir, c, frames, Options{Connection: "timetable"}, call, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	ledger, err := LoadLedger(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ledger.Records) != 2 || ledger.Records["frame-1"].Status != "synced" || ledger.Records["timetable:frame-1"].Status != "synced" || timetableCreates != 2 {
+		t.Fatalf("wrong receipts or retry count: %+v, %d", ledger.Records, timetableCreates)
+	}
+}
+
 func TestPendingSavedBeforeRequestAndNeverBlindlyRetried(t *testing.T) {
 	c, frames := fixture()
 	dir := t.TempDir()

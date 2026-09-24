@@ -417,6 +417,26 @@ projects to different Clockify workspaces. Nothing syncs in the background.
 See [Clockify setup, mapping, and recovery](docs/CLOCKIFY.md) for installation
 from this checkout, configuration, dry-run, and unattended sync.
 
+## Export time to Timetable
+
+Install the optional `burrowtime-timetable` connector, then create a personal
+token in Timetable Settings. Configure its site URL and user ID, map local
+projects, and preview before uploading:
+
+```bash
+go install github.com/fabean/BurrowTime/cmd/burrowtime-timetable@main
+export TIMETABLE_TOKEN='your-personal-token'
+burrowtime timetable configure --user YOUR_TIMETABLE_USER_ID
+burrowtime timetable projects
+burrowtime timetable map 'local project' TIMETABLE_PROJECT_UUID
+burrowtime timetable sync --today --dry-run
+burrowtime timetable sync --today
+```
+
+Timetable receives exact timestamps and stable frame IDs for safe retries.
+Clockify and Timetable mappings and receipts are independent. See
+[Timetable setup and recovery](docs/TIMETABLE.md).
+
 ## Logs, reports, and filters
 
 Use a shortcut range or explicit dates:
