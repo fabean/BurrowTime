@@ -11,16 +11,16 @@ go install ./cmd/burrowtime
 go install ./cmd/burrowtime-clockify
 ```
 
-To install without cloning, use `main`. Clockify support is not yet in the
-latest tagged release:
+To install without cloning, use the latest tagged release:
 
 ```bash
-go install github.com/fabean/BurrowTime/cmd/burrowtime@main
-go install github.com/fabean/BurrowTime/cmd/burrowtime-clockify@main
+go install github.com/fabean/BurrowTime/cmd/burrowtime@latest
+go install github.com/fabean/BurrowTime/cmd/burrowtime-clockify@latest
 ```
 
 The plugin executable must be on `PATH`. `make install` continues to install
 only BurrowTime and Watson; `make install-clockify` installs the connector.
+Release archives include the connector alongside the main executables.
 
 ## Configure
 

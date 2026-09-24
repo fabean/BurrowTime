@@ -7,11 +7,11 @@ Export completed BurrowTime entries to [Timetable](https://timetable.bluedroplab
 Install both BurrowTime and the optional connector on your `PATH`:
 
 ```sh
-go install github.com/fabean/BurrowTime/cmd/burrowtime@main
-go install github.com/fabean/BurrowTime/cmd/burrowtime-timetable@main
+go install github.com/fabean/BurrowTime/cmd/burrowtime@latest
+go install github.com/fabean/BurrowTime/cmd/burrowtime-timetable@latest
 ```
 
-From a checkout, `make install` and `make install-timetable` do the same. This connector is currently on `main` and may not be in the latest tagged release.
+From a checkout, use `make install` and `make install-timetable`. Release archives include both executables.
 
 ## Configure
 

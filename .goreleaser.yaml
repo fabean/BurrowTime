@@ -37,11 +37,47 @@ builds:
       - amd64
       - arm64
 
+  - id: burrowtime-clockify
+    main: ./cmd/burrowtime-clockify
+    binary: burrowtime-clockify
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+
+  - id: burrowtime-timetable
+    main: ./cmd/burrowtime-timetable
+    binary: burrowtime-timetable
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+
 archives:
   - id: release
     ids:
       - burrowtime
       - watson
+      - burrowtime-clockify
+      - burrowtime-timetable
     formats:
       - tar.gz
     format_overrides:

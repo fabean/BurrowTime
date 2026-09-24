@@ -24,10 +24,12 @@ The release workflow is defined in
 [`release.yml`](../.github/workflows/release.yml), and the artifact matrix is
 defined in [`.goreleaser.yaml`](../.goreleaser.yaml).
 
-Each archive contains both executables:
+Each archive contains four executables:
 
 - `burrowtime`, the normal CLI and interactive TUI;
-- `watson`, the optional compatibility entry point.
+- `watson`, the optional compatibility entry point;
+- `burrowtime-clockify`, the optional Clockify export connector;
+- `burrowtime-timetable`, the optional Timetable export connector.
 
 The only repository permission used by the workflow is `contents: write`,
 which allows its `GITHUB_TOKEN` to create a release and upload assets.

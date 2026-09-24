@@ -385,11 +385,11 @@ Mouse-wheel scrolling also works in the Log and Report views.
 ## Export time to Clockify
 
 Install the optional `burrowtime-clockify` executable alongside BurrowTime.
-Clockify support is currently on `main`, not in the latest tagged release:
+The latest release archive includes it, or install both executables with Go:
 
 ```bash
-go install github.com/fabean/BurrowTime/cmd/burrowtime@main
-go install github.com/fabean/BurrowTime/cmd/burrowtime-clockify@main
+go install github.com/fabean/BurrowTime/cmd/burrowtime@latest
+go install github.com/fabean/BurrowTime/cmd/burrowtime-clockify@latest
 ```
 
 Configure a workspace and user using `CLOCKIFY_WORKSPACE_ID`,
@@ -424,7 +424,7 @@ token in Timetable Settings. Configure its site URL and user ID, map local
 projects, and preview before uploading:
 
 ```bash
-go install github.com/fabean/BurrowTime/cmd/burrowtime-timetable@main
+go install github.com/fabean/BurrowTime/cmd/burrowtime-timetable@latest
 export TIMETABLE_TOKEN='your-personal-token'
 burrowtime timetable configure --user YOUR_TIMETABLE_USER_ID
 burrowtime timetable projects
