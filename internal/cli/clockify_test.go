@@ -8,8 +8,41 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/fabean/BurrowTime/internal/integrations"
 	"github.com/fabean/BurrowTime/internal/store"
 )
+
+func TestClockifyMapBillable(t *testing.T) {
+	for _, tt := range []struct {
+		name  string
+		flags []string
+		want  bool
+	}{
+		{name: "default", flags: []string{}, want: true},
+		{name: "explicit billable", flags: []string{"--billable"}, want: true},
+		{name: "non-billable", flags: []string{"--billable=false"}, want: false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			t.Setenv("CLOCKIFY_WORKSPACE_ID", "workspace")
+			t.Setenv("CLOCKIFY_USER_ID", "user")
+			if _, err := runBurrowTimeCommand(dir, "clockify", "configure"); err != nil {
+				t.Fatal(err)
+			}
+			args := append([]string{"clockify", "map", "portal", "project"}, tt.flags...)
+			if _, err := runBurrowTimeCommand(dir, args...); err != nil {
+				t.Fatal(err)
+			}
+			config, err := integrations.LoadConfig(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := config.Projects["portal"].Billable; got != tt.want {
+				t.Fatalf("saved billable = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
 
 func TestClockifyConfigureMapDryRunAndConfirmation(t *testing.T) {
 	dir := t.TempDir()

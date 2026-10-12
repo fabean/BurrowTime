@@ -20,12 +20,13 @@ func TestClockifySubprocessSyncDoesNotDuplicate(t *testing.T) {
 	code := `package main
 import("encoding/json";"os")
 func main(){
- var r struct{Version int;Operation string};json.NewDecoder(os.Stdin).Decode(&r)
+ var r struct{Version int;Operation string;Entry struct{Billable bool}};json.NewDecoder(os.Stdin).Decode(&r)
  response:=map[string]any{"version":1}
  switch r.Operation{
  case "check":response["user_id"]="user"
  case "projects":response["projects"]=[]map[string]string{{"id":"project","name":"Portal"}}
  case "create":
+  if !r.Entry.Billable{json.NewEncoder(os.Stdout).Encode(map[string]any{"version":1,"error":"expected billable entry"});return}
   f,e:=os.OpenFile(os.Getenv("BURROWTIME_TEST_POSTS"),os.O_CREATE|os.O_APPEND|os.O_WRONLY,0600);if e!=nil{os.Exit(1)};f.WriteString("create\n");f.Close()
   response["remote_id"]="remote-entry"
  default:response["error"]="unsupported"

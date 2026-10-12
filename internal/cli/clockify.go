@@ -98,7 +98,7 @@ func (a *app) clockify() *cobra.Command {
 	mapping := &cobra.Command{Use: "map LOCAL_PROJECT CLOCKIFY_PROJECT_ID", Short: "Route a local project to this connection", Args: cobra.ExactArgs(2)}
 	mapping.Flags().StringVar(&mapMode, "rounding", "", "Override connection rounding: off, up, nearest")
 	mapping.Flags().StringVar(&mapIncrement, "increment", "", "Override rounding increment")
-	mapping.Flags().BoolVar(&billable, "billable", false, "Mark exported entries billable")
+	mapping.Flags().BoolVar(&billable, "billable", true, "Mark exported entries billable (use --billable=false to opt out)")
 	mapping.RunE = func(cmd *cobra.Command, args []string) error {
 		return withConfig(func(cmd *cobra.Command, dir string, config *integrations.Config) error {
 			c, ok := config.Connections[name]

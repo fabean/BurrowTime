@@ -80,9 +80,20 @@ You can map projects directly instead:
 
 ```bash
 burrowtime clockify projects
-burrowtime clockify map "client portal" CLOCKIFY_PROJECT_ID --billable
-burrowtime clockify map "personal work" ANOTHER_PROJECT_ID --rounding off
+burrowtime clockify map "client portal" CLOCKIFY_PROJECT_ID
+burrowtime clockify map "personal work" ANOTHER_PROJECT_ID --billable=false --rounding off
 ```
+
+New mappings default to billable, including mappings created in the interactive
+picker. Use `--billable=false` for non-billable projects, or toggle individual
+entries during review.
+
+Existing mappings keep their saved billable setting. To correct a mapping created
+with the old non-billable default, rerun `clockify map LOCAL_PROJECT CLOCKIFY_PROJECT_ID
+--billable` with the same connection and any desired rounding overrides.
+This affects future exports; already uploaded entries must be corrected in
+Clockify. Syncing a date range that includes those older entries may flag them as
+changed after export; it will not upload duplicates.
 
 ## Rounding
 

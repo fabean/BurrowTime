@@ -119,6 +119,7 @@ func (p *exportPrompter) mapMissing(config *integrations.Config, frames []store.
 			}
 			config.Routes[opts.Connection][name] = mapping
 		} else {
+			mapping.Billable = true
 			config.Projects[name] = mapping
 		}
 	}

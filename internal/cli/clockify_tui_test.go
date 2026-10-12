@@ -193,4 +193,10 @@ func TestClockifyMapperOnlySelectsUnmappedInRange(t *testing.T) {
 	if calls != 1 || c.Projects["portal"].ProjectID != "p" {
 		t.Fatal("mapping failed")
 	}
+	if !c.Projects["portal"].Billable {
+		t.Fatal("new Clockify mapping must default to billable")
+	}
+	if c.Projects["mapped"].Billable {
+		t.Fatal("changed existing mapping's billable setting")
+	}
 }
