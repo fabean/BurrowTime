@@ -480,6 +480,10 @@ explicit seconds are preserved. Agent-owned timers and existing saved sessions
 are not rewritten. Set `options.time_precision` to `second` to restore the
 default behavior.
 
+<p align="center">
+  <img src="assets/burrowtime-flexible-datetime.gif" alt="BurrowTime accepting 12-hour and 24-hour historical times and enabling minute precision" width="900">
+</p>
+
 For overnight sessions, provide explicit dates on both endpoints so the end
 date is unambiguous. BurrowTime does not silently advance an end time to the
 next day.
