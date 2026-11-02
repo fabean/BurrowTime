@@ -403,6 +403,10 @@ the current field edit, or the editor without saving. The selection list skips
 active timers and completed agent-owned sessions; use the existing `edit ID`
 command for an active primary timer.
 
+<p align="center">
+  <img src="assets/burrowtime-session-edit-tui.gif" alt="BurrowTime selecting a completed session in Log, editing its timestamps, reviewing the save summary, and showing the updated duration" width="900">
+</p>
+
 The guided form uses the flexible timestamp formats supported by the CLI
 parser. Time-only values use the selected session's original date (the end
 field keeps its own date for overnight sessions). Messages can also be edited
