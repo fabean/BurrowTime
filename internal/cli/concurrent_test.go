@@ -51,6 +51,25 @@ func TestConcurrentStartJSONReturnsExactTimerID(t *testing.T) {
 	}
 }
 
+func TestStartOutputIncludesOptionalMessageAfterProjectAndTags(t *testing.T) {
+	dir := t.TempDir()
+	output, err := runBurrowTimeCommand(dir, "start", "RAF", "+RAF-326", "-m", "Investigating the migration issue")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(output, "Starting project RAF [RAF-326]") || !strings.Contains(output, " — Investigating the migration issue\n") {
+		t.Fatalf("start output=%q", output)
+	}
+
+	concurrentOutput, err := runBurrowTimeCommand(dir, "start", "--concurrent", "OIG", "+DOS-52", "--message", "Checking the related ticket")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(concurrentOutput, "Starting concurrent project OIG [DOS-52]") || !strings.Contains(concurrentOutput, " — Checking the related ticket\n") {
+		t.Fatalf("concurrent start output=%q", concurrentOutput)
+	}
+}
+
 func TestSessionMessagesPersistAcrossStartStopAndAppearInLogExports(t *testing.T) {
 	dir := t.TempDir()
 	if _, err := runBurrowTimeCommand(dir, "start", "RAF", "+RAF-326", "-m", "Investigating issue"); err != nil {

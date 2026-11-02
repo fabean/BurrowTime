@@ -899,9 +899,9 @@ func (a *app) start() *cobra.Command {
 				return json.NewEncoder(cmd.OutOrStdout()).Encode(timer)
 			}
 			if len(timers) == 0 {
-				fmt.Fprintf(cmd.OutOrStdout(), "Starting project %s%s at %s\n", styleText("project", timer.Project), formatTags(timer.Tags), styleText("time", displayStart.Format("15:04")))
+				fmt.Fprintf(cmd.OutOrStdout(), "Starting project %s%s at %s%s\n", styleText("project", timer.Project), formatTags(timer.Tags), styleText("time", displayStart.Format("15:04")), startedMessageSuffix(message))
 			} else {
-				fmt.Fprintf(cmd.OutOrStdout(), "Starting concurrent project %s%s at %s (timer: %s)\n", styleText("project", timer.Project), formatTags(timer.Tags), styleText("time", displayStart.Format("15:04")), styleText("id", shortID(timer.ID)))
+				fmt.Fprintf(cmd.OutOrStdout(), "Starting concurrent project %s%s at %s (timer: %s)%s\n", styleText("project", timer.Project), formatTags(timer.Tags), styleText("time", displayStart.Format("15:04")), styleText("id", shortID(timer.ID)), startedMessageSuffix(message))
 			}
 			return nil
 		}
@@ -958,7 +958,7 @@ func (a *app) start() *cobra.Command {
 			timer := store.ActiveTimer{ID: watson.PrimaryTimerID, Project: state.Project, Start: state.Start, Tags: state.Tags, Primary: true}
 			return json.NewEncoder(cmd.OutOrStdout()).Encode(timer)
 		}
-		fmt.Fprintf(cmd.OutOrStdout(), "Starting project %s%s at %s\n", styleText("project", state.Project), formatTags(state.Tags), styleText("time", displayStart.Format("15:04")))
+		fmt.Fprintf(cmd.OutOrStdout(), "Starting project %s%s at %s%s\n", styleText("project", state.Project), formatTags(state.Tags), styleText("time", displayStart.Format("15:04")), startedMessageSuffix(message))
 		return nil
 	}}
 	cmd.Flags().StringVar(&at, "at", "", "start frame at a local time (for example '9am'; omit the date for today)")
@@ -999,6 +999,13 @@ func (a *app) start() *cobra.Command {
 	}
 	cmd.ValidArgsFunction = a.completeProjectOrTag
 	return cmd
+}
+
+func startedMessageSuffix(message string) string {
+	if message != "" {
+		return " — " + message
+	}
+	return ""
 }
 
 func commandSupportsTUI(cmd *cobra.Command) bool {
