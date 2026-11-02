@@ -387,6 +387,10 @@ ticket/tag. It uses the same range selector and text filter as Log and Report;
 press `←`/`→` to change the range and `/` to filter projects, tags, IDs, or
 dates. Untagged time remains included in project and daily totals.
 
+<p align="center">
+  <img src="assets/burrowtime-aggregate-tui.gif" alt="BurrowTime Aggregate TUI grouping daily totals by project and ticket, including untagged time" width="900">
+</p>
+
 ## Export time to Clockify
 
 Install the optional `burrowtime-clockify` executable alongside BurrowTime.
