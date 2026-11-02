@@ -38,4 +38,5 @@ demos: build
 	vhs docs/vhs/flexible-datetime.tape
 	vhs docs/vhs/agent-session.tape
 	vhs docs/vhs/aggregate-tui.tape
+	vhs docs/vhs/session-messages.tape
 	vhs docs/vhs/tui.tape

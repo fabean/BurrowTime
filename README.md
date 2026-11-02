@@ -377,6 +377,7 @@ MCP version, skill targets, session states, and individual features.
 | `←` / `→` | Change the report range |
 | `/` | Filter by project, tag, frame ID, or date |
 | `tab` | Cycle between Log, Report, and Aggregate |
+| `m` | Toggle session messages in the current Log, Report, or Aggregate view |
 | `b` / `esc` | Go back |
 | `q` | Quit |
 
@@ -509,10 +510,17 @@ burrowtime log --all --json
 burrowtime aggregate --week --show-messages
 ```
 
-Use `burrowtime edit -1 -m ""` to clear a message. The Log TUI shows messages
-by default; press `m` to toggle them. Report messages start hidden and use the
-same toggle. Aggregate messages are also hidden by default and can be shown
-with `m`; they appear under the matching ticket without changing totals.
+Messages are optional and remain separate from tags, so adding different work
+descriptions to sessions with the same ticket does not change project or ticket
+totals. Use `burrowtime edit -1 -m ""` to clear a message. In the TUI, Log
+messages are visible by default; Report and Aggregate messages are hidden by
+default. Press `m` to toggle visibility independently in each view. The CLI
+aggregate output hides messages by default; `--show-messages` displays them
+under their project and tag without changing totals.
+
+<p align="center">
+  <img src="assets/burrowtime-session-messages.gif" alt="BurrowTime starting a timer with a message, replacing it when stopping, and showing the saved message in aggregate output" width="900">
+</p>
 
 Use JSON or CSV when another program will consume the result:
 
@@ -556,6 +564,8 @@ kept outside that core format:
 
 - concurrent timers live in the additive `active_timers` file;
 - agent ownership and leases live in the additive `agent_sessions` file;
+- session messages live in the additive `session_messages` companion file,
+  keyed by frame or timer ID;
 - the first running timer remains in the compatible `state` file;
 - completed concurrent timers become ordinary Watson frames;
 - the Bubble Tea UI calls the same command and reporting implementation as the
