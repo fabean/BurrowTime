@@ -538,6 +538,39 @@ burrowtime report --month --csv > august.csv
 
 Session JSON and CSV logs include a message field/column when available.
 
+### Interactive session wizards
+
+Use the optional start wizard to choose a recent project, search existing
+projects, select or enter tags, and confirm a new timer:
+
+```bash
+burrowtime start --interactive
+burrowtime start -i
+```
+
+Add an earlier completed session with the guided form:
+
+```bash
+burrowtime add --interactive
+burrowtime add -i
+```
+
+Type to search projects, use the arrow keys to browse suggestions, and press
+Enter to select. Use Ctrl+N to create a new project. At the tag step, enter
+multiple tags separated by commas or press Tab to add a suggested tag; Enter
+without tags skips them. Enter accepts the start wizard's current-time default.
+Both wizards include an optional session message. The add wizard requires
+start and end times; a time-only end value uses the start date, while an
+explicit date can be entered for overnight work. Prompts use the same flexible
+date/time formats as the ordinary CLI commands, including `9am`, `2:30 PM`,
+`14:30`, and explicit dates such as `2026-10-26 09:30`.
+
+Review the summary before confirming. Esc returns to the previous field (or
+cancels from the project field), and Ctrl+C cancels from any step without
+starting or adding a session. Interactive mode requires a terminal and is
+never enabled by default. Existing positional project/tag arguments and
+`--at` / `--from` / `--to` values prefill their matching fields.
+
 Run `burrowtime <command> --help` for every available flag.
 
 ## Watson compatibility and migration

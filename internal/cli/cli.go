@@ -815,6 +815,7 @@ func isoWeekDate(year, week, weekday int, loc *time.Location) time.Time {
 
 func (a *app) start() *cobra.Command {
 	var at, message string
+	var interactive bool
 	gap := true
 	var stopSet, stopRunning, concurrent, jsonOutput bool
 	var confirmProject, confirmTag bool
@@ -838,11 +839,27 @@ func (a *app) start() *cobra.Command {
 			}
 		}
 		project, tags := parseProjectTags(args)
+		var wizardResult *sessionWizardResult
+		if interactive {
+			result, wizardErr := runSessionWizard(cmd, s, startWizard, sessionWizardDefaults{Project: project, Tags: tags, Start: at, Message: message})
+			if wizardErr != nil {
+				return wizardErr
+			}
+			wizardResult = &result
+			project, tags = result.Project, result.Tags
+			message = result.Message
+		}
 		if project == "" {
 			return errors.New("No project given.")
 		}
 		var when *time.Time
-		if at != "" {
+		if wizardResult != nil {
+			when = wizardResult.Start
+			if when == nil && minutePrecisionEnabled(s, a.name != "watson") {
+				parsed := floorMinute(s.Now())
+				when = &parsed
+			}
+		} else if at != "" {
 			parsed, e := parseTime(at, s.Now())
 			if e != nil {
 				return e
@@ -853,12 +870,12 @@ func (a *app) start() *cobra.Command {
 			when = &parsed
 		}
 		reader := bufio.NewReader(cmd.InOrStdin())
-		if s.Config.Bool("options", "confirm_new_project", false) || confirmProject {
+		if !interactive && (s.Config.Bool("options", "confirm_new_project", false) || confirmProject) {
 			if err := confirmNewProject(reader, cmd, project, s.Projects()); err != nil {
 				return err
 			}
 		}
-		if s.Config.Bool("options", "confirm_new_tag", false) || confirmTag {
+		if !interactive && (s.Config.Bool("options", "confirm_new_tag", false) || confirmTag) {
 			if err := confirmNewTags(reader, cmd, tags, s.Tags()); err != nil {
 				return err
 			}
@@ -885,7 +902,7 @@ func (a *app) start() *cobra.Command {
 			if startErr != nil {
 				return startErr
 			}
-			if cmd.Flags().Changed("message") {
+			if interactive || cmd.Flags().Changed("message") {
 				if err := s.SetTimerMessage(timer.ID, message); err != nil {
 					return err
 				}
@@ -945,7 +962,7 @@ func (a *app) start() *cobra.Command {
 		if err != nil {
 			return err
 		}
-		if cmd.Flags().Changed("message") {
+		if interactive || cmd.Flags().Changed("message") {
 			if err := s.SetTimerMessage(watson.PrimaryTimerID, message); err != nil {
 				return err
 			}
@@ -963,6 +980,9 @@ func (a *app) start() *cobra.Command {
 	}}
 	cmd.Flags().StringVar(&at, "at", "", "start frame at a local time (for example '9am'; omit the date for today)")
 	cmd.Flags().StringVarP(&message, "message", "m", "", "session message")
+	if a.name != "watson" {
+		cmd.Flags().BoolVarP(&interactive, "interactive", "i", false, "guide session setup with an interactive wizard")
+	}
 	cmd.Flags().BoolFuncP("gap", "g", "leave a gap after the previous frame", func(value string) error {
 		enabled, err := strconv.ParseBool(value)
 		if err == nil {
@@ -1355,6 +1375,7 @@ func (a *app) restart() *cobra.Command {
 
 func (a *app) add() *cobra.Command {
 	var from, to, message string
+	var interactive bool
 	var confirmProject, confirmTag bool
 	cmd := &cobra.Command{Use: "add [project] [+tag ...]", Short: "Add time not tracked live.", Args: cobra.ArbitraryArgs, FParseErrWhitelist: cobra.FParseErrWhitelist{UnknownFlags: true}, RunE: func(cmd *cobra.Command, args []string) error {
 		s, e := a.open()
@@ -1362,24 +1383,42 @@ func (a *app) add() *cobra.Command {
 			return e
 		}
 		p, t := parseProjectTags(args)
+		var wizardResult *sessionWizardResult
+		if interactive {
+			result, wizardErr := runSessionWizard(cmd, s, addWizard, sessionWizardDefaults{Project: p, Tags: t, Start: from, End: to, Message: message})
+			if wizardErr != nil {
+				return wizardErr
+			}
+			wizardResult = &result
+			p, t = result.Project, result.Tags
+			message = result.Message
+		}
 		if p == "" {
 			return errors.New("No project given.")
 		}
-		f, e1 := parseTime(from, s.Now())
-		if e1 != nil {
-			return e1
-		}
-		t2, e2 := parseTime(to, s.Now())
-		if e2 != nil {
-			return e2
+		var f, t2 time.Time
+		if wizardResult != nil {
+			if wizardResult.Start == nil || wizardResult.End == nil {
+				return errors.New("Interactive session ended without both timestamps.")
+			}
+			f, t2 = *wizardResult.Start, *wizardResult.End
+		} else {
+			f, e = parseTime(from, s.Now())
+			if e != nil {
+				return e
+			}
+			t2, e = parseTime(to, s.Now())
+			if e != nil {
+				return e
+			}
 		}
 		reader := bufio.NewReader(cmd.InOrStdin())
-		if s.Config.Bool("options", "confirm_new_project", false) || confirmProject {
+		if !interactive && (s.Config.Bool("options", "confirm_new_project", false) || confirmProject) {
 			if err := confirmNewProject(reader, cmd, p, s.Projects()); err != nil {
 				return err
 			}
 		}
-		if s.Config.Bool("options", "confirm_new_tag", false) || confirmTag {
+		if !interactive && (s.Config.Bool("options", "confirm_new_tag", false) || confirmTag) {
 			if err := confirmNewTags(reader, cmd, t, s.Tags()); err != nil {
 				return err
 			}
@@ -1388,7 +1427,7 @@ func (a *app) add() *cobra.Command {
 		if e != nil {
 			return e
 		}
-		if cmd.Flags().Changed("message") {
+		if interactive || cmd.Flags().Changed("message") {
 			frame, e = s.SetFrameMessage(frame.ID, message)
 			if e != nil {
 				return e
@@ -1400,6 +1439,21 @@ func (a *app) add() *cobra.Command {
 	cmd.Flags().StringVarP(&from, "from", "f", "", "date and time activity started (time-only values mean today)")
 	cmd.Flags().StringVarP(&to, "to", "t", "", "date and time activity ended (time-only values mean today)")
 	cmd.Flags().StringVarP(&message, "message", "m", "", "session message")
+	if a.name != "watson" {
+		cmd.Flags().BoolVarP(&interactive, "interactive", "i", false, "guide session setup with an interactive wizard")
+		cmd.PreRunE = func(cmd *cobra.Command, _ []string) error {
+			for _, name := range []string{"from", "to"} {
+				if interactive {
+					if flag := cmd.Flags().Lookup(name); flag != nil && flag.Annotations != nil {
+						delete(flag.Annotations, cobra.BashCompOneRequiredFlag)
+					}
+				} else {
+					_ = cmd.MarkFlagRequired(name)
+				}
+			}
+			return nil
+		}
+	}
 	_ = cmd.MarkFlagRequired("from")
 	_ = cmd.MarkFlagRequired("to")
 	cmd.Flags().BoolVarP(&confirmProject, "confirm-new-project", "c", false, "confirm addition of new project")
