@@ -138,26 +138,16 @@ func parseEditDocument(data []byte, needStop bool, now time.Time) (parsedEdit, e
 	if err := json.Unmarshal(data, &doc); err != nil {
 		return parsedEdit{}, err
 	}
-	loc := now.Location()
-	if tz := os.Getenv("TZ"); tz != "" {
-		loaded, err := time.LoadLocation(tz)
-		if err != nil {
-			return parsedEdit{}, err
-		}
-		loc = loaded
-	}
-	parsedStart, err := time.Parse("2006-01-02 15:04:05", doc.Start)
+	start, err := parseTime(doc.Start, now)
 	if err != nil {
 		return parsedEdit{}, err
 	}
-	start := localWallTime(parsedStart.Year(), parsedStart.Month(), parsedStart.Day(), parsedStart.Hour(), parsedStart.Minute(), parsedStart.Second(), 0, loc)
 	result := parsedEdit{Project: doc.Project, Tags: doc.Tags, Start: start}
 	if needStop {
-		parsedStop, err := time.Parse("2006-01-02 15:04:05", doc.Stop)
+		stop, err := parseTime(doc.Stop, now)
 		if err != nil {
 			return parsedEdit{}, err
 		}
-		stop := localWallTime(parsedStop.Year(), parsedStop.Month(), parsedStop.Day(), parsedStop.Hour(), parsedStop.Minute(), parsedStop.Second(), 0, loc)
 		result.Stop = stop
 		if start.After(stop) {
 			return parsedEdit{}, errors.New("Task cannot end before it starts.")

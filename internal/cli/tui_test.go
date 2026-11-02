@@ -146,6 +146,70 @@ func TestWatsonDateFormats(t *testing.T) {
 	}
 }
 
+func TestFlexibleTimeFormatsDefaultToToday(t *testing.T) {
+	loc, err := time.LoadLocation("America/New_York")
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, time.October, 27, 16, 0, 0, 0, loc)
+	cases := map[string]string{
+		"2:30 PM": "2026-10-27 14:30:00", "2pm": "2026-10-27 14:00:00",
+		"9am": "2026-10-27 09:00:00", "9:15 AM": "2026-10-27 09:15:00",
+		"14:30": "2026-10-27 14:30:00", "09:15": "2026-10-27 09:15:00",
+		"12pm": "2026-10-27 12:00:00", "12am": "2026-10-27 00:00:00",
+		"2026-10-26 2:30 PM": "2026-10-26 14:30:00", "today 9am": "2026-10-27 09:00:00",
+		"yesterday 2:30 PM": "2026-10-26 14:30:00", "2026-10-26 14:30": "2026-10-26 14:30:00",
+	}
+	for input, want := range cases {
+		got, err := parseTime(input, now)
+		if err != nil {
+			t.Errorf("%q: %v", input, err)
+			continue
+		}
+		if formatted := got.In(loc).Format("2006-01-02 15:04:05"); formatted != want {
+			t.Errorf("%q: want %s got %s", input, want, formatted)
+		}
+	}
+}
+
+func TestFlexibleTimeRejectsInvalidClocksAndKeepsDSTWallTime(t *testing.T) {
+	loc, err := time.LoadLocation("America/New_York")
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, time.March, 8, 12, 0, 0, 0, loc)
+	for _, input := range []string{"13 PM", "0 AM", "25:00", "2026-02-30 9am"} {
+		if _, err := parseTime(input, now); err == nil || !strings.Contains(err.Error(), "such as '9:30 AM'") {
+			t.Errorf("%q: expected useful invalid-time error, got %v", input, err)
+		}
+	}
+	got, err := parseTime("2:30 AM", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Format("2006-01-02 15:04 MST") != "2026-03-08 02:30 EDT" {
+		t.Fatalf("unexpected DST wall time: %s", got.Format("2006-01-02 15:04 MST"))
+	}
+}
+
+func TestEditDocumentAcceptsFlexibleTimesForToday(t *testing.T) {
+	loc, err := time.LoadLocation("America/Chicago")
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, time.October, 27, 16, 0, 0, 0, loc)
+	parsed, err := parseEditDocument([]byte(`{"project":"p","start":"9:30 AM","stop":"11:15 AM","tags":[]}`), true, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if parsed.Start.Format("2006-01-02 15:04") != "2026-10-27 09:30" || parsed.Stop.Format("2006-01-02 15:04") != "2026-10-27 11:15" {
+		t.Fatalf("parsed start=%s stop=%s", parsed.Start, parsed.Stop)
+	}
+	if _, err := parseEditDocument([]byte(`{"project":"p","start":"11:00 PM","stop":"1:00 AM","tags":[]}`), true, now); err == nil || err.Error() != "Task cannot end before it starts." {
+		t.Fatalf("expected overnight ambiguity error, got %v", err)
+	}
+}
+
 func TestNonexistentDSTWallTimeMatchesDateutil(t *testing.T) {
 	loc, err := time.LoadLocation("America/New_York")
 	if err != nil {

@@ -453,6 +453,23 @@ burrowtime report --from 2026-08-01 --to 2026-08-15
 burrowtime aggregate --year
 ```
 
+Time inputs accept 24-hour values such as `14:30` and AM/PM values such as
+`2:30 PM`. When a time has no date, BurrowTime uses today in your local
+timezone. Add an explicit date for historical work; `today` and `yesterday`
+may also precede a time:
+
+```bash
+burrowtime start RAF +RAF-326 --at "9am"
+burrowtime stop --at "11:30 AM"
+burrowtime add --from "9:30 AM" --to "11:15 AM" RAF +RAF-326
+burrowtime add --from "2026-10-26 9:30 AM" --to "2026-10-26 11:15 AM" RAF +RAF-326
+burrowtime stop --at "yesterday 2:30 PM"
+```
+
+For overnight sessions, provide explicit dates on both endpoints so the end
+date is unambiguous. BurrowTime does not silently advance an end time to the
+next day.
+
 Use JSON or CSV when another program will consume the result:
 
 ```bash

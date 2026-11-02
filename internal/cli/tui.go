@@ -22,7 +22,7 @@ var menuItems = []menuItem{
 	{"status", "Show the running timer", ""},
 	{"restart", "Restart a previous frame", "-1"},
 	{"cancel", "Discard the running timer", ""},
-	{"add", "Add time tracked earlier", "--from '2026-08-17 09:00' --to '2026-08-17 10:00' project"},
+	{"add", "Add time tracked earlier", "--from '9:00 AM' --to '10:00 AM' project"},
 	{"log", "Browse and filter recorded sessions", ""},
 	{"report", "Explore time grouped by project", ""},
 	{"aggregate", "Aggregate a report by day", "--month"},
