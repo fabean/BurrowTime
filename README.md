@@ -522,6 +522,13 @@ under their project and tag without changing totals.
   <img src="assets/burrowtime-session-messages.gif" alt="BurrowTime starting a timer with a message, replacing it when stopping, and showing the saved message in aggregate output" width="900">
 </p>
 
+The TUI shows messages beneath their sessions in Log. In Report, press `m` to
+show messages beneath the matching project and ticket:
+
+<p align="center">
+  <img src="assets/burrowtime-session-messages-tui.gif" alt="BurrowTime TUI showing session messages in Log by default and toggling grouped messages on in Report" width="900">
+</p>
+
 Use JSON or CSV when another program will consume the result:
 
 ```bash
