@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"strings"
 	"time"
 
 	"github.com/fabean/BurrowTime/internal/store"
@@ -28,10 +29,92 @@ type editDocument struct {
 func (a *app) edit() *cobra.Command {
 	var confirmProject, confirmTag bool
 	var message string
+	var interactive bool
 	cmd := &cobra.Command{Use: "edit [ID]", Short: "Edit a frame.", Args: cobra.MaximumNArgs(1), FParseErrWhitelist: cobra.FParseErrWhitelist{UnknownFlags: true}, RunE: func(cmd *cobra.Command, args []string) error {
 		s, err := a.openData()
 		if err != nil {
 			return err
+		}
+		if interactive {
+			if cmd.Flags().Changed("message") {
+				return errors.New("Edit the message in the interactive form; `--message` cannot be combined with `--interactive`.")
+			}
+			preselect := ""
+			if len(args) > 0 {
+				preselect = args[0]
+				for _, timer := range s.RunningTimers() {
+					if timer.ID == preselect || strings.HasPrefix(timer.ID, preselect) {
+						return errors.New("Interactive editing is for completed sessions; use `edit` without `-i` for the active primary timer.")
+					}
+				}
+				frame, _, lookupErr := s.Lookup(preselect)
+				if lookupErr != nil {
+					return lookupErr
+				}
+				if frame.Stop == nil {
+					return errors.New("Interactive editing is available for completed sessions; use `edit ID` to edit the active primary timer.")
+				}
+				if sessionEditIsAgentOwned(s, frame) {
+					return errors.New("Agent-owned sessions cannot be edited interactively.")
+				}
+			}
+			ref, pickErr := runSessionPicker(cmd, s, preselect)
+			if pickErr != nil {
+				return pickErr
+			}
+			if ref == "" {
+				fmt.Fprintln(cmd.OutOrStdout(), "No change made.")
+				return nil
+			}
+			frame, _, lookupErr := s.Lookup(ref)
+			if lookupErr != nil {
+				return lookupErr
+			}
+			if frame.Stop == nil {
+				return errors.New("Interactive editing is available for completed sessions only.")
+			}
+			if sessionEditIsAgentOwned(s, frame) {
+				return errors.New("Agent-owned sessions cannot be edited interactively.")
+			}
+			form, formErr := runSessionEditForm(cmd, newSessionEditModel(frame, ref, s.Now()))
+			if formErr != nil {
+				return formErr
+			}
+			if form.canceled || !form.confirmed {
+				fmt.Fprintln(cmd.OutOrStdout(), "No change made.")
+				return nil
+			}
+			if !form.hasChanges() {
+				fmt.Fprintln(cmd.OutOrStdout(), "No change made.")
+				return nil
+			}
+			if err := s.LoadConfig(); err != nil {
+				return err
+			}
+			reader := bufio.NewReader(cmd.InOrStdin())
+			proposal := form.proposal()
+			if (s.Config.Bool("options", "confirm_new_project", false) || confirmProject) && proposal.Project != frame.Project {
+				if err := confirmNewProject(reader, cmd, proposal.Project, s.Projects()); err != nil {
+					return err
+				}
+			}
+			if (s.Config.Bool("options", "confirm_new_tag", false) || confirmTag) && !sameStrings(proposal.Tags, frame.Tags) {
+				if err := confirmNewTags(reader, cmd, proposal.Tags, s.Tags()); err != nil {
+					return err
+				}
+			}
+			updated, err := applyFrameEdit(s, ref, proposal)
+			if err != nil {
+				return err
+			}
+			if proposal.MessageSet {
+				updated, err = s.SetFrameMessage(ref, proposal.Message)
+				if err != nil {
+					return err
+				}
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "Edited frame for project %s%s, from %s to %s (%s)\n", styleText("project", updated.Project), formatTags(updated.Tags), styleText("time", proposal.Start.Format("15:04:05")), styleText("time", proposal.Stop.Format("15:04:05")), formatDuration(proposal.Stop.Unix()-proposal.Start.Unix()))
+			return nil
 		}
 		ref := ""
 		if len(args) > 0 {
@@ -131,7 +214,7 @@ func (a *app) edit() *cobra.Command {
 				fmt.Fprintf(cmd.OutOrStdout(), "Edited frame for project %s%s, from %s to - (-)\n", styleText("project", parsed.Project), formatTags(parsed.Tags), styleText("time", parsed.Start.Format("15:04:05")))
 				return nil
 			}
-			updated, err := s.EditFrame(frame.ID, parsed.Project, parsed.Tags, parsed.Start, parsed.Stop)
+			updated, err := applyFrameEdit(s, frame.ID, parsed)
 			if err != nil {
 				return err
 			}
@@ -145,11 +228,36 @@ func (a *app) edit() *cobra.Command {
 			return nil
 		}
 	}}
+	if a.name != "watson" {
+		cmd.Flags().BoolVarP(&interactive, "interactive", "i", false, "select and edit a session interactively")
+	}
 	cmd.Flags().BoolVarP(&confirmProject, "confirm-new-project", "c", false, "confirm addition of new project")
 	cmd.Flags().BoolVarP(&confirmTag, "confirm-new-tag", "b", false, "confirm creation of new tag")
 	cmd.Flags().StringVarP(&message, "message", "m", "", "replace or clear the session message")
 	cmd.ValidArgsFunction = a.completeFrames
 	return cmd
+}
+
+func sameStrings(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func applyFrameEdit(s *watson.Service, ref string, proposal parsedEdit) (store.Frame, error) {
+	if strings.TrimSpace(proposal.Project) == "" {
+		return store.Frame{}, errors.New("Project cannot be empty.")
+	}
+	if !proposal.Stop.After(proposal.Start) {
+		return store.Frame{}, errors.New("Session duration must be greater than zero; end time must be after start time.")
+	}
+	return s.EditFrame(ref, proposal.Project, proposal.Tags, proposal.Start, proposal.Stop)
 }
 
 type parsedEdit struct {

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -45,6 +46,7 @@ const (
 	tuiReport
 	tuiAggregate
 	tuiCommands
+	tuiEdit
 )
 
 type tuiInputMode uint8
@@ -77,6 +79,11 @@ type dashboardModel struct {
 	logMessagesVisible       bool
 	reportMessagesVisible    bool
 	aggregateMessagesVisible bool
+	logEditMode              bool
+	logEditCursor            int
+	logEditRef               string
+	editForm                 *sessionEditModel
+	editNotice               string
 }
 
 var (
@@ -143,7 +150,13 @@ func (m dashboardModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := message.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
+		if m.editForm != nil {
+			m.editForm.width = msg.Width
+		}
 		m.clampScroll()
+		if m.screen == tuiLog && m.logEditMode {
+			m.keepLogEditSelectionVisible()
+		}
 		return m, nil
 	case tuiTick:
 		m.now = time.Time(msg)
@@ -158,6 +171,9 @@ func (m dashboardModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case tea.KeyMsg:
+		if m.screen == tuiEdit {
+			return m.updateEdit(msg)
+		}
 		if msg.String() == "ctrl+c" {
 			return m, tea.Quit
 		}
@@ -239,6 +255,20 @@ func (m dashboardModel) updateScreen(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m.activateMenuItem(menuItems[m.commandCursor])
 		}
 	case tuiLog, tuiReport, tuiAggregate:
+		if m.screen == tuiLog && m.logEditMode {
+			switch key {
+			case "esc":
+				m.logEditMode = false
+				m.logEditRef = ""
+			case "up", "k":
+				m.moveLogEditSelection(-1)
+			case "down", "j":
+				m.moveLogEditSelection(1)
+			case "enter":
+				m.openLogEditForm()
+			}
+			return m, nil
+		}
 		if key == "m" {
 			switch m.screen {
 			case tuiLog:
@@ -258,6 +288,10 @@ func (m dashboardModel) updateScreen(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		switch key {
+		case "e":
+			if m.screen == tuiLog {
+				m.startLogEditSelection()
+			}
 		case "esc", "b":
 			m.openScreen(tuiHome)
 		case "tab":
@@ -365,6 +399,10 @@ func (m dashboardModel) View() string {
 		body = m.aggregateView()
 	case tuiCommands:
 		body = m.commandsView()
+	case tuiEdit:
+		if m.editForm != nil {
+			body = m.editForm.View()
+		}
 	default:
 		body = m.homeView()
 	}
@@ -489,36 +527,50 @@ func (m dashboardModel) logView() string {
 	toolbar := m.queryToolbar("LOG", len(m.tuiFrames(false)), "sessions")
 	content, position := m.viewport(lines)
 	footer := m.queryFooter()
-	footer += tuiMutedStyle.Render("  m messages " + visibilityLabel(m.logMessagesVisible))
+	if m.logEditMode {
+		footer = tuiHelp("↑/↓ or j/k", "select session", "enter", "edit", "esc", "cancel")
+	} else {
+		footer += tuiMutedStyle.Render("  m messages " + visibilityLabel(m.logMessagesVisible) + "  e edit session")
+	}
+	if m.editNotice != "" {
+		footer += "  " + tuiMutedStyle.Render(m.editNotice)
+	}
 	return m.header("Log") + "\n\n" + toolbar + "\n\n" + content + "\n" + padBetween(footer, position, m.contentWidth())
 }
 
 func (m dashboardModel) logLines() []string {
-	frames := m.tuiFrames(false)
+	lines, _ := m.logLayout()
+	return lines
+}
+
+func (m dashboardModel) logLayout() ([]string, map[string]int) {
+	frames := m.logDisplayFrames()
 	if len(frames) == 0 {
-		return []string{"", tuiMutedStyle.Render("  No sessions match this range and filter.")}
+		return []string{"", tuiMutedStyle.Render("  No sessions match this range and filter.")}, map[string]int{}
 	}
 	loc := watsonDisplayLocation(m.now)
-	byDay := map[string][]store.Frame{}
+	byDay := map[string][]editSessionOption{}
 	var days []string
-	for _, frame := range frames {
+	for _, option := range frames {
+		frame := option.frame
 		day := time.Unix(frame.Start, 0).In(loc).Format("2006-01-02")
 		if _, exists := byDay[day]; !exists {
 			days = append(days, day)
 		}
-		byDay[day] = append(byDay[day], frame)
+		byDay[day] = append(byDay[day], option)
 	}
 	sort.Sort(sort.Reverse(sort.StringSlice(days)))
 	width := m.contentWidth()
 	var lines []string
+	positions := make(map[string]int, len(frames))
 	for dayIndex, day := range days {
 		if dayIndex > 0 {
 			lines = append(lines, "")
 		}
 		dayFrames := byDay[day]
-		sort.SliceStable(dayFrames, func(i, j int) bool { return dayFrames[i].Start < dayFrames[j].Start })
 		var total int64
-		for _, frame := range dayFrames {
+		for _, option := range dayFrames {
+			frame := option.frame
 			if frame.Stop != nil {
 				total += *frame.Stop - frame.Start
 			}
@@ -527,7 +579,8 @@ func (m dashboardModel) logLines() []string {
 		dayTitle := tuiBrandStyle.Render(date.Format("Monday, 02 January 2006"))
 		lines = append(lines, padBetween(dayTitle, tuiTimeStyle.Render(formatDuration(total)), width))
 		lines = append(lines, tuiMutedStyle.Render(strings.Repeat("─", max(1, width))))
-		for _, frame := range dayFrames {
+		for _, option := range dayFrames {
+			frame := option.frame
 			start := time.Unix(frame.Start, 0).In(loc)
 			stop := m.now.In(loc)
 			if frame.Stop != nil {
@@ -542,6 +595,12 @@ func (m dashboardModel) logLines() []string {
 				projectWidth := max(8, width-32)
 				line := "  " + tuiTimeStyle.Render(start.Format("15:04")+"–"+stop.Format("15:04")) + "  " +
 					tuiTagStyle.Render(truncate(frame.Project, projectWidth))
+				if option.ref != "" {
+					positions[option.ref] = len(lines)
+				}
+				if m.logEditMode && option.ref != "" && option.ref == m.logEditRef {
+					line = lipgloss.NewStyle().Foreground(tuiPrimary).Background(tuiSurface).Bold(true).Render("› " + strings.TrimLeft(line, " "))
+				}
 				lines = append(lines, padBetween(line, tuiMutedStyle.Render(formatDuration(duration)), width))
 				if tags != "" {
 					lines = append(lines, "                "+tuiMutedStyle.Render(truncate(tags, max(1, width-16))))
@@ -564,13 +623,209 @@ func (m dashboardModel) logLines() []string {
 			if tags != "" {
 				line += "  " + tuiMutedStyle.Render(truncate(tags, tagsWidth))
 			}
+			if option.ref != "" {
+				positions[option.ref] = len(lines)
+			}
+			if m.logEditMode && option.ref != "" && option.ref == m.logEditRef {
+				line = lipgloss.NewStyle().Foreground(tuiPrimary).Background(tuiSurface).Bold(true).Render("› " + strings.TrimLeft(line, " "))
+			}
 			lines = append(lines, line)
 			if m.logMessagesVisible && frame.Message != "" {
 				lines = append(lines, "      "+tuiMutedStyle.Render("↳ "+frame.Message))
 			}
 		}
 	}
-	return lines
+	return lines, positions
+}
+
+func (m dashboardModel) logDisplayFrames() []editSessionOption {
+	frames := m.tuiFrames(false)
+	loc := watsonDisplayLocation(m.now)
+	sort.SliceStable(frames, func(i, j int) bool {
+		a := time.Unix(frames[i].Start, 0).In(loc).Format("2006-01-02")
+		b := time.Unix(frames[j].Start, 0).In(loc).Format("2006-01-02")
+		if a != b {
+			return a > b
+		}
+		return frames[i].Start < frames[j].Start
+	})
+	used := map[int]bool{}
+	options := make([]editSessionOption, 0, len(frames))
+	for _, frame := range frames {
+		ref := frame.ID
+		index := -1
+		if frame.ID != "" {
+			for i, original := range m.service.Frames {
+				if original.ID == frame.ID {
+					index = i
+					break
+				}
+			}
+		} else if frame.Stop != nil {
+			for i, original := range m.service.Frames {
+				if !used[i] && sameFrameIdentity(original, frame) {
+					index = i
+					break
+				}
+			}
+		}
+		if index >= 0 {
+			used[index] = true
+			if ref == "" {
+				ref = strconv.Itoa(index - len(m.service.Frames))
+			}
+		}
+		options = append(options, editSessionOption{frame: frame, index: index, ref: ref})
+	}
+	return options
+}
+
+func sameFrameIdentity(a, b store.Frame) bool {
+	if a.Start != b.Start || a.Project != b.Project || len(a.Tags) != len(b.Tags) {
+		return false
+	}
+	if a.Stop == nil || b.Stop == nil {
+		if a.Stop != b.Stop {
+			return false
+		}
+	} else if *a.Stop != *b.Stop {
+		return false
+	}
+	return sameStrings(a.Tags, b.Tags)
+}
+
+func (m dashboardModel) logEditableFrames() []editSessionOption {
+	owned := agentOwnedFrameIDs(m.service)
+	frames := m.logDisplayFrames()
+	editable := make([]editSessionOption, 0, len(frames))
+	for _, option := range frames {
+		if option.frame.Stop != nil && option.index >= 0 && !owned[option.frame.ID] {
+			editable = append(editable, option)
+		}
+	}
+	return editable
+}
+
+func (m *dashboardModel) startLogEditSelection() {
+	options := m.logEditableFrames()
+	if len(options) == 0 {
+		m.editNotice = "No completed editable sessions in this view."
+		return
+	}
+	m.editNotice = ""
+	m.logEditMode = true
+	m.logEditCursor = max(0, min(m.logEditCursor, len(options)-1))
+	m.logEditRef = options[m.logEditCursor].ref
+	m.keepLogEditSelectionVisible()
+}
+
+func (m *dashboardModel) moveLogEditSelection(delta int) {
+	options := m.logEditableFrames()
+	if len(options) == 0 {
+		m.logEditMode = false
+		m.logEditRef = ""
+		m.editNotice = "No completed editable sessions in this view."
+		return
+	}
+	m.logEditCursor = max(0, min(len(options)-1, m.logEditCursor+delta))
+	m.logEditRef = options[m.logEditCursor].ref
+	m.keepLogEditSelectionVisible()
+}
+
+func (m *dashboardModel) keepLogEditSelectionVisible() {
+	_, positions := m.logLayout()
+	line, ok := positions[m.logEditRef]
+	if !ok {
+		return
+	}
+	if line < m.scroll {
+		m.scroll = line
+	} else if line >= m.scroll+m.viewportHeight() {
+		m.scroll = line - m.viewportHeight() + 1
+	}
+	m.clampScroll()
+}
+
+func (m *dashboardModel) openLogEditForm() {
+	options := m.logEditableFrames()
+	if m.logEditCursor < 0 || m.logEditCursor >= len(options) {
+		return
+	}
+	selected := options[m.logEditCursor]
+	m.editForm = ptrSessionEditModel(newSessionEditModel(selected.frame, selected.ref, m.now))
+	m.screen = tuiEdit
+	m.editNotice = ""
+}
+
+func ptrSessionEditModel(model sessionEditModel) *sessionEditModel { return &model }
+
+func (m dashboardModel) updateEdit(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.editForm == nil {
+		m.screen = tuiLog
+		return m, nil
+	}
+	updated, _ := m.editForm.Update(msg)
+	form := updated.(sessionEditModel)
+	m.editForm = &form
+	if form.canceled {
+		m.editForm = nil
+		m.screen = tuiLog
+		return m, nil
+	}
+	if !form.confirmed {
+		return m, nil
+	}
+	if !form.hasChanges() {
+		m.editForm = nil
+		m.screen = tuiLog
+		m.logEditMode = true
+		m.editNotice = "No changes made."
+		m.keepLogEditSelectionVisible()
+		return m, nil
+	}
+	proposal := form.proposal()
+	updatedFrame, err := applyFrameEdit(m.service, form.ref, proposal)
+	if err != nil {
+		form.confirmed = false
+		form.confirm = false
+		form.errorText = err.Error()
+		m.editForm = &form
+		return m, nil
+	}
+	if proposal.MessageSet {
+		updatedFrame, err = m.service.SetFrameMessage(form.ref, proposal.Message)
+		if err != nil {
+			form.confirmed = false
+			form.confirm = false
+			form.errorText = err.Error()
+			m.editForm = &form
+			return m, nil
+		}
+	}
+	editedRef := form.ref
+	m.editForm = nil
+	m.screen = tuiLog
+	m.logEditMode = true
+	m.logEditRef = editedRef
+	m.editNotice = "Session saved."
+	if updatedFrame.ID != "" {
+		m.logEditRef = updatedFrame.ID
+	}
+	options := m.logEditableFrames()
+	matched := false
+	for i, option := range options {
+		if option.ref == m.logEditRef {
+			m.logEditCursor = i
+			matched = true
+			break
+		}
+	}
+	if !matched && len(options) > 0 {
+		m.logEditCursor = max(0, min(m.logEditCursor, len(options)-1))
+		m.logEditRef = options[m.logEditCursor].ref
+	}
+	m.keepLogEditSelectionVisible()
+	return m, nil
 }
 
 func (m dashboardModel) reportView() string {

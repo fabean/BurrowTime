@@ -373,6 +373,7 @@ MCP version, skill targets, session states, and individual features.
 | `↑` / `↓`, `j` / `k` | Move or scroll |
 | `enter` | Open the selected action |
 | `l` / `r` / `a` | Open Log, Report, or Aggregate from the dashboard |
+| `e` | Select a completed Log session to edit |
 | `s` / `x` | Start or stop a timer |
 | `←` / `→` | Change the report range |
 | `/` | Filter by project, tag, frame ID, or date |
@@ -391,6 +392,31 @@ dates. Untagged time remains included in project and daily totals.
 <p align="center">
   <img src="assets/burrowtime-aggregate-tui.gif" alt="BurrowTime Aggregate TUI grouping daily totals by project and ticket, including untagged time" width="900">
 </p>
+
+From Log, press `e` to select a completed session, use arrows or `j`/`k` to
+move, and press Enter to edit it. Press `/` to search by project, tag, date,
+or session ID. In the editor, use arrows or Tab to choose a field, press Enter
+to edit it, and use Ctrl+U to clear a field before typing. Select **Save
+Changes** and confirm the summary to write the update. Esc cancels selection,
+the current field edit, or the editor without saving. The selection list skips
+active timers and completed agent-owned sessions; use the existing `edit ID`
+command for an active primary timer.
+
+The guided form uses the flexible timestamp formats supported by the CLI
+parser. Time-only values use the selected session's original date (the end
+field keeps its own date for overnight sessions). Messages can also be edited
+in the form and remain stored separately from tags.
+
+The CLI also supports guided selection and editing:
+
+```bash
+burrowtime edit --interactive
+burrowtime edit -i
+burrowtime edit -i 5f3a9c1
+```
+
+An optional ID opens the selector with that session preselected. The normal
+`burrowtime edit ID` external-editor workflow remains available.
 
 ## Export time to Clockify
 

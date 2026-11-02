@@ -171,6 +171,98 @@ func TestMessageVisibilityDefaultsAndTogglesIndependently(t *testing.T) {
 	}
 }
 
+func TestLogEditSelectionNavigatesOpensCancelsAndSavesInPlace(t *testing.T) {
+	model := tuiTestModel()
+	repo, err := store.New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	model.service.Repo = repo
+	model.screen = tuiLog
+	model.rangeIndex = 4
+	model.filter = "client"
+	originalRange, originalFilter := model.rangeIndex, model.filter
+
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}})
+	model = updated.(dashboardModel)
+	if !model.logEditMode || model.logEditRef != "aaaaaaaaaaaaaaaa" {
+		t.Fatalf("edit selection did not start at the first matching session: %#v", model)
+	}
+	if view := model.View(); !strings.Contains(view, "›") || !strings.Contains(view, "select session") {
+		t.Fatalf("selected session is not indicated: %s", view)
+	}
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(dashboardModel)
+	if model.screen != tuiEdit || model.editForm == nil || model.editForm.project != "alpha" {
+		t.Fatalf("enter did not open prepopulated editor: %#v", model)
+	}
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	model = updated.(dashboardModel)
+	if model.screen != tuiLog || model.service.Frames[0].Project != "alpha" || model.rangeIndex != originalRange || model.filter != originalFilter {
+		t.Fatalf("cancel changed data or view state: %#v", model)
+	}
+
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(dashboardModel)
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(dashboardModel) // Begin editing Project.
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyCtrlU})
+	model = updated.(dashboardModel)
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("renamed")})
+	model = updated.(dashboardModel)
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(dashboardModel)
+	for i := 0; i < 4; i++ {
+		updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyDown})
+		model = updated.(dashboardModel)
+	}
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(dashboardModel)
+	if !model.editForm.confirm {
+		t.Fatal("save did not request confirmation")
+	}
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(dashboardModel)
+	if model.screen != tuiLog || model.service.Frames[0].Project != "renamed" || model.filter != originalFilter || model.rangeIndex != originalRange {
+		t.Fatalf("save did not refresh in place: %#v", model)
+	}
+	if !model.logEditMode || model.logEditRef != "aaaaaaaaaaaaaaaa" || !strings.Contains(model.editNotice, "saved") {
+		t.Fatalf("save did not preserve selection/status: %#v", model)
+	}
+}
+
+func TestLogEditSelectionScrollsAndStaysVisibleAfterResize(t *testing.T) {
+	model := tuiTestModel()
+	model.screen = tuiLog
+	model.rangeIndex = 4
+	model.height = 12
+	for i := 0; i < 30; i++ {
+		start := model.now.AddDate(0, 0, -i).Add(9 * time.Hour)
+		stop := start.Add(time.Hour).Unix()
+		model.service.Frames = append(model.service.Frames, store.Frame{
+			Start: start.Unix(), Stop: &stop, Project: "project", ID: strings.Repeat("a", 31) + string(rune('a'+i)), Tags: []string{"T-1"},
+		})
+	}
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}})
+	model = updated.(dashboardModel)
+	for i := 0; i < 25; i++ {
+		updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyDown})
+		model = updated.(dashboardModel)
+	}
+	_, positions := model.logLayout()
+	selectedLine := positions[model.logEditRef]
+	if selectedLine < model.scroll || selectedLine >= model.scroll+model.viewportHeight() {
+		t.Fatalf("selection line %d is outside scroll window [%d,%d)", selectedLine, model.scroll, model.scroll+model.viewportHeight())
+	}
+	updated, _ = model.Update(tea.WindowSizeMsg{Width: 64, Height: 10})
+	model = updated.(dashboardModel)
+	_, positions = model.logLayout()
+	selectedLine = positions[model.logEditRef]
+	if selectedLine < model.scroll || selectedLine >= model.scroll+model.viewportHeight() || model.scroll > model.maxScroll() {
+		t.Fatalf("resize lost selected row: line=%d scroll=%d max=%d", selectedLine, model.scroll, model.maxScroll())
+	}
+}
+
 func TestDashboardFilterMatchesProjectsTagsAndIDs(t *testing.T) {
 	model := tuiTestModel()
 	model.rangeIndex = 4
