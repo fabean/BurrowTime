@@ -18,7 +18,11 @@ Type "export TZ=UTC"
 Enter
 Type "rm -rf /tmp/burrowtime-vhs-session-wizard && mkdir -p /tmp/burrowtime-vhs-session-wizard/burrowtime /tmp/burrowtime-vhs-session-wizard/watson"
 Enter
-Type "./bin/burrowtime add --from '2026-10-26 09:00' --to '2026-10-26 09:30' Demo +DEMO-101 >/dev/null"
+Type "./bin/burrowtime add --from '2026-10-24 09:00' --to '2026-10-24 09:30' Demo +DEMO-101 >/dev/null"
+Enter
+Type "./bin/burrowtime add --from '2026-10-25 09:00' --to '2026-10-25 09:30' Sample +SAMPLE-2 >/dev/null"
+Enter
+Type "./bin/burrowtime add --from '2026-10-26 09:00' --to '2026-10-26 09:30' Planning +PLAN-8 >/dev/null"
 Enter
 Ctrl+L
 Show
@@ -26,6 +30,8 @@ Show
 Type "./bin/burrowtime start -i"
 Enter
 Sleep 3s
+Down
+Sleep 1s
 Enter
 Sleep 2s
 Tab
@@ -46,10 +52,11 @@ Sleep 1s
 Type "./bin/burrowtime add -i"
 Enter
 Sleep 3s
-Enter
-Sleep 2s
-Tab
+Type "Research"
 Sleep 1s
+Ctrl+N
+Sleep 1s
+Type "NEW-TASK-42"
 Enter
 Sleep 2s
 Type "2026-10-27 13:00"
