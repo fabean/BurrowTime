@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/fabean/BurrowTime/internal/store"
+	"github.com/fabean/BurrowTime/internal/watson"
 	"github.com/spf13/cobra"
 )
 
@@ -21,10 +22,12 @@ type editDocument struct {
 	Start   string   `json:"start"`
 	Stop    string   `json:"stop,omitempty"`
 	Tags    []string `json:"tags"`
+	Message string   `json:"message,omitempty"`
 }
 
 func (a *app) edit() *cobra.Command {
 	var confirmProject, confirmTag bool
+	var message string
 	cmd := &cobra.Command{Use: "edit [ID]", Short: "Edit a frame.", Args: cobra.MaximumNArgs(1), FParseErrWhitelist: cobra.FParseErrWhitelist{UnknownFlags: true}, RunE: func(cmd *cobra.Command, args []string) error {
 		s, err := a.openData()
 		if err != nil {
@@ -37,7 +40,7 @@ func (a *app) edit() *cobra.Command {
 		editingCurrent := ref == "" && s.State.Running()
 		var frame store.Frame
 		if editingCurrent {
-			frame = store.Frame{Start: s.State.Start, Project: s.State.Project, Tags: s.State.Tags}
+			frame = store.Frame{Start: s.State.Start, Project: s.State.Project, Tags: s.State.Tags, Message: s.Messages.Timers[watson.PrimaryTimerID]}
 		} else {
 			if ref == "" {
 				ref = "-1"
@@ -50,8 +53,23 @@ func (a *app) edit() *cobra.Command {
 				return err
 			}
 		}
+		if cmd.Flags().Changed("message") {
+			if editingCurrent {
+				if err := s.SetTimerMessage(watson.PrimaryTimerID, message); err != nil {
+					return err
+				}
+				fmt.Fprintf(cmd.OutOrStdout(), "Updated message for running project %s.\n", styleText("project", frame.Project))
+				return nil
+			}
+			updated, err := s.SetFrameMessage(frame.ID, message)
+			if err != nil {
+				return err
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "Updated message for frame %s.\n", styleText("id", shortID(updated.ID)))
+			return nil
+		}
 		displayLoc := watsonDisplayLocation(s.Now())
-		doc := map[string]any{"project": frame.Project, "start": time.Unix(frame.Start, 0).In(displayLoc).Format("2006-01-02 15:04:05"), "tags": frame.Tags}
+		doc := map[string]any{"project": frame.Project, "start": time.Unix(frame.Start, 0).In(displayLoc).Format("2006-01-02 15:04:05"), "tags": frame.Tags, "message": frame.Message}
 		if !editingCurrent {
 			doc["stop"] = time.Unix(*frame.Stop, 0).In(displayLoc).Format("2006-01-02 15:04:05")
 		}
@@ -84,6 +102,9 @@ func (a *app) edit() *cobra.Command {
 				initial = edited
 				continue
 			}
+			if cmd.Flags().Changed("message") {
+				parsed.Message, parsed.MessageSet = message, true
+			}
 			if err := s.LoadConfig(); err != nil {
 				return err
 			}
@@ -102,6 +123,11 @@ func (a *app) edit() *cobra.Command {
 				if err != nil {
 					return err
 				}
+				if parsed.MessageSet {
+					if err := s.SetTimerMessage(watson.PrimaryTimerID, parsed.Message); err != nil {
+						return err
+					}
+				}
 				fmt.Fprintf(cmd.OutOrStdout(), "Edited frame for project %s%s, from %s to - (-)\n", styleText("project", parsed.Project), formatTags(parsed.Tags), styleText("time", parsed.Start.Format("15:04:05")))
 				return nil
 			}
@@ -109,12 +135,19 @@ func (a *app) edit() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if parsed.MessageSet {
+				updated, err = s.SetFrameMessage(frame.ID, parsed.Message)
+				if err != nil {
+					return err
+				}
+			}
 			fmt.Fprintf(cmd.OutOrStdout(), "Edited frame for project %s%s, from %s to %s (%s)\n", styleText("project", updated.Project), formatTags(updated.Tags), styleText("time", parsed.Start.Format("15:04:05")), styleText("time", parsed.Stop.Format("15:04:05")), formatDuration(parsed.Stop.Unix()-parsed.Start.Unix()))
 			return nil
 		}
 	}}
 	cmd.Flags().BoolVarP(&confirmProject, "confirm-new-project", "c", false, "confirm addition of new project")
 	cmd.Flags().BoolVarP(&confirmTag, "confirm-new-tag", "b", false, "confirm creation of new tag")
+	cmd.Flags().StringVarP(&message, "message", "m", "", "replace or clear the session message")
 	cmd.ValidArgsFunction = a.completeFrames
 	return cmd
 }
@@ -123,6 +156,8 @@ type parsedEdit struct {
 	Project     string
 	Tags        []string
 	Start, Stop time.Time
+	Message     string
+	MessageSet  bool
 }
 
 func parseEditDocument(data []byte, needStop bool, now time.Time) (parsedEdit, error) {
@@ -152,7 +187,8 @@ func parseEditDocumentOnDates(data []byte, needStop bool, now, startDefault, sto
 	if err != nil {
 		return parsedEdit{}, err
 	}
-	result := parsedEdit{Project: doc.Project, Tags: doc.Tags, Start: start}
+	_, messageSet := raw["message"]
+	result := parsedEdit{Project: doc.Project, Tags: doc.Tags, Start: start, Message: doc.Message, MessageSet: messageSet}
 	if needStop {
 		stop, err := parseTime(doc.Stop, stopDefault)
 		if err != nil {

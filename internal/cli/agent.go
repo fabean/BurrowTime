@@ -28,7 +28,7 @@ func (a *app) agent() *cobra.Command {
 }
 
 func (a *app) agentStart() *cobra.Command {
-	var project, task, client, owner, repository, branch, idempotencyKey, leaseText string
+	var project, task, client, owner, repository, branch, idempotencyKey, leaseText, message string
 	var tags []string
 	var jsonOutput bool
 	cmd := &cobra.Command{
@@ -84,6 +84,11 @@ func (a *app) agentStart() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if cmd.Flags().Changed("message") && !duplicate {
+				if err := s.SetTimerMessage(session.TimerID, message); err != nil {
+					return err
+				}
+			}
 			result := agentSessionResult{Session: session, Duplicate: duplicate}
 			if jsonOutput {
 				return writeJSON(cmd, result)
@@ -105,6 +110,7 @@ func (a *app) agentStart() *cobra.Command {
 	cmd.Flags().StringVar(&branch, "branch", "", "branch metadata")
 	cmd.Flags().StringVar(&idempotencyKey, "idempotency-key", "", "stable retry key scoped to the client")
 	cmd.Flags().StringVar(&leaseText, "lease", "", "session lease duration (default 30m)")
+	cmd.Flags().StringVarP(&message, "message", "m", "", "session message")
 	cmd.Flags().BoolVar(&jsonOutput, "json", false, "output the session as JSON")
 	return cmd
 }
@@ -139,6 +145,7 @@ func (a *app) agentStop() *cobra.Command {
 
 func (a *app) agentSessionMutation(name, description string, action func(*watson.Service, string) (agentSessionResult, error)) *cobra.Command {
 	var sessionRef string
+	var message string
 	var jsonOutput bool
 	cmd := &cobra.Command{
 		Use:   name,
@@ -148,6 +155,16 @@ func (a *app) agentSessionMutation(name, description string, action func(*watson
 			s, err := a.openData()
 			if err != nil {
 				return err
+			}
+			if name == "stop" && cmd.Flags().Changed("message") {
+				for _, session := range s.AgentSessions {
+					if session.ID == sessionRef || strings.HasPrefix(session.ID, sessionRef) {
+						if err := s.SetTimerMessage(session.TimerID, message); err != nil {
+							return err
+						}
+						break
+					}
+				}
 			}
 			result, err := action(s, sessionRef)
 			if err != nil {
@@ -163,6 +180,9 @@ func (a *app) agentSessionMutation(name, description string, action func(*watson
 	cmd.Flags().StringVarP(&sessionRef, "session", "s", "", "agent session ID")
 	_ = cmd.MarkFlagRequired("session")
 	cmd.Flags().BoolVar(&jsonOutput, "json", false, "output the session as JSON")
+	if name == "stop" {
+		cmd.Flags().StringVarP(&message, "message", "m", "", "message for the stopped session")
+	}
 	return cmd
 }
 

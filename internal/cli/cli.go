@@ -814,7 +814,7 @@ func isoWeekDate(year, week, weekday int, loc *time.Location) time.Time {
 }
 
 func (a *app) start() *cobra.Command {
-	var at string
+	var at, message string
 	gap := true
 	var stopSet, stopRunning, concurrent, jsonOutput bool
 	var confirmProject, confirmTag bool
@@ -885,6 +885,12 @@ func (a *app) start() *cobra.Command {
 			if startErr != nil {
 				return startErr
 			}
+			if cmd.Flags().Changed("message") {
+				if err := s.SetTimerMessage(timer.ID, message); err != nil {
+					return err
+				}
+				timer.Message = message
+			}
 			displayStart := time.Unix(timer.Start, 0).In(s.Now().Location())
 			if when != nil {
 				displayStart = *when
@@ -939,6 +945,11 @@ func (a *app) start() *cobra.Command {
 		if err != nil {
 			return err
 		}
+		if cmd.Flags().Changed("message") {
+			if err := s.SetTimerMessage(watson.PrimaryTimerID, message); err != nil {
+				return err
+			}
+		}
 		displayStart := time.Unix(state.Start, 0).In(s.Now().Location())
 		if when != nil {
 			displayStart = *when
@@ -951,6 +962,7 @@ func (a *app) start() *cobra.Command {
 		return nil
 	}}
 	cmd.Flags().StringVar(&at, "at", "", "start frame at a local time (for example '9am'; omit the date for today)")
+	cmd.Flags().StringVarP(&message, "message", "m", "", "session message")
 	cmd.Flags().BoolFuncP("gap", "g", "leave a gap after the previous frame", func(value string) error {
 		enabled, err := strconv.ParseBool(value)
 		if err == nil {
@@ -999,7 +1011,7 @@ func commandSupportsTUI(cmd *cobra.Command) bool {
 }
 
 func (a *app) stop() *cobra.Command {
-	var at string
+	var at, message string
 	var all bool
 	var timerRef string
 	cmd := &cobra.Command{Use: "stop", Short: "Stop monitoring time for the current project.", Args: cobra.NoArgs, FParseErrWhitelist: cobra.FParseErrWhitelist{UnknownFlags: true}, RunE: func(cmd *cobra.Command, _ []string) error {
@@ -1024,10 +1036,21 @@ func (a *app) stop() *cobra.Command {
 			when = &parsed
 		}
 		minutePrecision := minutePrecisionEnabled(s, a.name != "watson")
+		setStopMessage := func(ref string) error {
+			if !cmd.Flags().Changed("message") {
+				return nil
+			}
+			return s.SetTimerMessage(ref, message)
+		}
 		if all && timerRef != "" {
 			return errors.New("--all and --timer are mutually exclusive")
 		}
 		if all {
+			for _, timer := range s.RunningTimers() {
+				if err := setStopMessage(timer.ID); err != nil {
+					return err
+				}
+			}
 			if at == "" && minutePrecision {
 				when = floorAllStops(s)
 			}
@@ -1041,6 +1064,9 @@ func (a *app) stop() *cobra.Command {
 			return nil
 		}
 		if timerRef != "" {
+			if err := setStopMessage(timerRef); err != nil {
+				return err
+			}
 			if at == "" && minutePrecision && !isAgentTimerRef(s, timerRef) {
 				parsed := floorMinute(s.Now())
 				when = &parsed
@@ -1058,6 +1084,9 @@ func (a *app) stop() *cobra.Command {
 			return errors.New("No project started.")
 		}
 		if len(timers) == 1 || a.name == "watson" {
+			if err := setStopMessage(timers[0].ID); err != nil {
+				return err
+			}
 			if at == "" && minutePrecision && !isAgentTimer(s, timers[0].ID) {
 				parsed := floorMinute(s.Now())
 				when = &parsed
@@ -1080,6 +1109,11 @@ func (a *app) stop() *cobra.Command {
 			return pickErr
 		}
 		if selection == stopAllSelection {
+			for _, timer := range s.RunningTimers() {
+				if err := setStopMessage(timer.ID); err != nil {
+					return err
+				}
+			}
 			if at == "" && minutePrecision {
 				when = floorAllStops(s)
 			}
@@ -1091,6 +1125,9 @@ func (a *app) stop() *cobra.Command {
 				printStoppedFrame(cmd, frame, s.Now())
 			}
 			return nil
+		}
+		if err := setStopMessage(selection); err != nil {
+			return err
 		}
 		if at == "" && minutePrecision && !isAgentTimer(s, selection) {
 			parsed := floorMinute(s.Now())
@@ -1105,6 +1142,7 @@ func (a *app) stop() *cobra.Command {
 		return nil
 	}}
 	cmd.Flags().StringVar(&at, "at", "", "stop frame at a local time (for example '2:30 PM'; omit the date for today)")
+	cmd.Flags().StringVarP(&message, "message", "m", "", "message for the stopped session")
 	if a.name != "watson" {
 		cmd.Flags().BoolVarP(&all, "all", "a", false, "stop all running timers")
 		cmd.Flags().StringVarP(&timerRef, "timer", "t", "", "stop a running timer by ID")
@@ -1309,7 +1347,7 @@ func (a *app) restart() *cobra.Command {
 }
 
 func (a *app) add() *cobra.Command {
-	var from, to string
+	var from, to, message string
 	var confirmProject, confirmTag bool
 	cmd := &cobra.Command{Use: "add [project] [+tag ...]", Short: "Add time not tracked live.", Args: cobra.ArbitraryArgs, FParseErrWhitelist: cobra.FParseErrWhitelist{UnknownFlags: true}, RunE: func(cmd *cobra.Command, args []string) error {
 		s, e := a.open()
@@ -1343,11 +1381,18 @@ func (a *app) add() *cobra.Command {
 		if e != nil {
 			return e
 		}
+		if cmd.Flags().Changed("message") {
+			frame, e = s.SetFrameMessage(frame.ID, message)
+			if e != nil {
+				return e
+			}
+		}
 		fmt.Fprintf(cmd.OutOrStdout(), "Adding project %s%s, started %s and stopped %s. (id: %s)\n", styleText("project", frame.Project), formatTags(frame.Tags), styleText("time", humanize(f, s.Now())), styleText("time", humanize(t2, s.Now())), styleText("id", shortID(frame.ID)))
 		return nil
 	}}
 	cmd.Flags().StringVarP(&from, "from", "f", "", "date and time activity started (time-only values mean today)")
 	cmd.Flags().StringVarP(&to, "to", "t", "", "date and time activity ended (time-only values mean today)")
+	cmd.Flags().StringVarP(&message, "message", "m", "", "session message")
 	_ = cmd.MarkFlagRequired("from")
 	_ = cmd.MarkFlagRequired("to")
 	cmd.Flags().BoolVarP(&confirmProject, "confirm-new-project", "c", false, "confirm addition of new project")

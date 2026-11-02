@@ -497,12 +497,31 @@ For overnight sessions, provide explicit dates on both endpoints so the end
 date is unambiguous. BurrowTime does not silently advance an end time to the
 next day.
 
+Add a message to describe work performed on a session. Messages stay separate
+from tags, so ticket-based reports continue to group time as before:
+
+```bash
+burrowtime start RAF +RAF-326 -m "Investigating migration issue"
+burrowtime stop -m "Fixed migration mapping and updated tests"
+burrowtime add --from "2026-10-27 10:00" --to "2026-10-27 11:00" RAF +RAF-326 -m "Completed QA testing"
+burrowtime edit -1 -m "Updated description"
+burrowtime log --all --json
+burrowtime aggregate --week --show-messages
+```
+
+Use `burrowtime edit -1 -m ""` to clear a message. The Log TUI shows messages
+by default; press `m` to toggle them. Report messages start hidden and use the
+same toggle. Aggregate messages are also hidden by default and can be shown
+with `m`; they appear under the matching ticket without changing totals.
+
 Use JSON or CSV when another program will consume the result:
 
 ```bash
 burrowtime log --all --json | jq '.[0]'
 burrowtime report --month --csv > august.csv
 ```
+
+Session JSON and CSV logs include a message field/column when available.
 
 Run `burrowtime <command> --help` for every available flag.
 
