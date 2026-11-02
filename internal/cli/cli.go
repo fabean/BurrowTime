@@ -692,6 +692,21 @@ func withinSameMinute(a, b time.Time) bool {
 	return delta < 60
 }
 
+func alignStartMinuteBoundary(frames []store.Frame, requested *time.Time, enabled bool) *time.Time {
+	if !enabled || requested == nil || len(frames) == 0 {
+		return requested
+	}
+	previous := frames[len(frames)-1]
+	if previous.Stop == nil {
+		return requested
+	}
+	previousStop := time.Unix(*previous.Stop, 0).In(requested.Location())
+	if requested.Unix() < *previous.Stop && withinSameMinute(*requested, previousStop) {
+		return &previousStop
+	}
+	return requested
+}
+
 func isAgentTimer(s *watson.Service, timerID string) bool {
 	for _, session := range s.AgentSessions {
 		if session.TimerID == timerID && session.Running() {
@@ -949,14 +964,12 @@ func (a *app) start() *cobra.Command {
 				}
 			}
 		}
-		if a.name != "watson" && !concurrent && gap && when != nil && (hasMinutePrecision(at) || at == "" && minutePrecisionEnabled(s, true)) && len(s.Frames) > 0 {
-			previous := s.Frames[len(s.Frames)-1]
-			if previous.Stop != nil {
-				previousStop := time.Unix(*previous.Stop, 0).In(when.Location())
-				if when.Unix() < *previous.Stop && withinSameMinute(*when, previousStop) {
-					when = &previousStop
-				}
-			}
+		minuteStart := hasMinutePrecision(at) || at == "" && minutePrecisionEnabled(s, a.name != "watson")
+		if wizardResult != nil && wizardResult.StartMinutePrecision {
+			minuteStart = true
+		}
+		if a.name != "watson" && !concurrent && gap {
+			when = alignStartMinuteBoundary(s.Frames, when, minuteStart)
 		}
 		state, err := s.Start(project, tags, when, gap, false)
 		if err != nil {

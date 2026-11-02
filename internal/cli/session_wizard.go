@@ -41,11 +41,12 @@ type sessionWizardDefaults struct {
 }
 
 type sessionWizardResult struct {
-	Project string
-	Tags    []string
-	Start   *time.Time
-	End     *time.Time
-	Message string
+	Project              string
+	Tags                 []string
+	Start                *time.Time
+	End                  *time.Time
+	Message              string
+	StartMinutePrecision bool
 }
 
 type sessionWizardModel struct {
@@ -494,7 +495,12 @@ func (m sessionWizardModel) effectiveTags() []string {
 }
 
 func (m sessionWizardModel) result() sessionWizardResult {
-	result := sessionWizardResult{Project: m.project, Tags: append([]string(nil), m.tags...), Message: m.messageText}
+	result := sessionWizardResult{
+		Project:              m.project,
+		Tags:                 append([]string(nil), m.tags...),
+		Message:              m.messageText,
+		StartMinutePrecision: hasMinutePrecision(m.startText),
+	}
 	if m.hasStart && !(m.kind == startWizard && m.startText == "") {
 		start := m.startTime
 		result.Start = &start

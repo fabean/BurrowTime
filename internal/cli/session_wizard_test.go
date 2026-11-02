@@ -112,6 +112,44 @@ func TestSessionWizardRetriesInvalidTimeAndUsesHistoricalStartDateForEnd(t *test
 	}
 }
 
+func TestSessionWizardRetainsMinutePrecisionForAdjacentStartAlignment(t *testing.T) {
+	s := wizardTestService(t)
+	now := time.Date(2026, time.November, 2, 12, 31, 0, 0, time.Local)
+	s.Now = func() time.Time { return now }
+	model := newSessionWizardModel(s, startWizard, sessionWizardDefaults{Project: "alpha"})
+	model.step = wizardStart
+	model.input = []rune("12:30")
+	model, _ = wizardUpdate(model, tea.KeyMsg{Type: tea.KeyEnter})
+	model, _ = wizardUpdate(model, tea.KeyMsg{Type: tea.KeyEnter}) // Skip optional message.
+	result := model.result()
+	if !result.StartMinutePrecision || result.Start == nil {
+		t.Fatalf("minute precision was lost from wizard result: %#v", result)
+	}
+
+	previousStop := time.Date(2026, time.November, 2, 12, 30, 37, 0, time.Local)
+	stopUnix := previousStop.Unix()
+	aligned := alignStartMinuteBoundary([]store.Frame{{Stop: &stopUnix}}, result.Start, result.StartMinutePrecision)
+	if !aligned.Equal(previousStop) {
+		t.Fatalf("same-minute overlap was not aligned: got %s, want %s", aligned, previousStop)
+	}
+
+	meaningfulOverlap := time.Date(2026, time.November, 2, 12, 29, 0, 0, time.Local)
+	unchanged := alignStartMinuteBoundary([]store.Frame{{Stop: &stopUnix}}, &meaningfulOverlap, true)
+	if !unchanged.Equal(meaningfulOverlap) {
+		t.Fatalf("meaningful overlap was unexpectedly aligned: %s", unchanged)
+	}
+
+	withSeconds := "2026-11-02 12:30:15"
+	model = newSessionWizardModel(s, startWizard, sessionWizardDefaults{Project: "alpha", Start: withSeconds})
+	model.step = wizardStart
+	model.input = []rune(withSeconds)
+	model, _ = wizardUpdate(model, tea.KeyMsg{Type: tea.KeyEnter})
+	model, _ = wizardUpdate(model, tea.KeyMsg{Type: tea.KeyEnter})
+	if model.result().StartMinutePrecision {
+		t.Fatal("explicit seconds should not be treated as minute precision")
+	}
+}
+
 func TestInteractiveCommandsRequireTTYWithoutChangingData(t *testing.T) {
 	for _, command := range [][]string{{"start", "-i"}, {"add", "--interactive"}} {
 		dir := t.TempDir()
