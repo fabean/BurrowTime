@@ -21,7 +21,7 @@ func TestSplitCommandLine(t *testing.T) {
 	}
 }
 
-func TestDashboardNavigatesToNativeLogAndReportViews(t *testing.T) {
+func TestDashboardCyclesBetweenLogReportAndAggregateViews(t *testing.T) {
 	model := tuiTestModel()
 
 	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}})
@@ -34,6 +34,103 @@ func TestDashboardNavigatesToNativeLogAndReportViews(t *testing.T) {
 	model = updated.(dashboardModel)
 	if model.screen != tuiReport {
 		t.Fatalf("screen=%v, want report", model.screen)
+	}
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyTab})
+	model = updated.(dashboardModel)
+	if model.screen != tuiAggregate {
+		t.Fatalf("screen=%v, want aggregate", model.screen)
+	}
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyTab})
+	model = updated.(dashboardModel)
+	if model.screen != tuiLog {
+		t.Fatalf("screen=%v, want log after cycling", model.screen)
+	}
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
+	model = updated.(dashboardModel)
+	if model.screen != tuiAggregate {
+		t.Fatalf("screen=%v, want aggregate via shortcut", model.screen)
+	}
+}
+
+func TestAggregateViewGroupsDailyProjectAndTagTotals(t *testing.T) {
+	model := tuiTestModel()
+	model.now = time.Date(2026, time.August, 18, 13, 0, 0, 0, time.UTC)
+	model.service.Now = func() time.Time { return model.now }
+	model.rangeIndex = 4
+	day := time.Date(2026, time.August, 17, 0, 0, 0, 0, time.UTC)
+	makeFrame := func(start, stop time.Time, project string, tags ...string) store.Frame {
+		end := stop.Unix()
+		return store.Frame{Start: start.Unix(), Stop: &end, Project: project, Tags: tags}
+	}
+	model.service.Frames = []store.Frame{
+		makeFrame(day.Add(9*time.Hour), day.Add(10*time.Hour), "RAF", "RAF-326"),
+		makeFrame(day.Add(10*time.Hour), day.Add(11*time.Hour), "RAF", "RAF-326"),
+		makeFrame(day.Add(10*time.Hour), day.Add(10*time.Hour+30*time.Minute), "Redesign", "FR-889"),
+		makeFrame(day.Add(11*time.Hour), day.Add(12*time.Hour), "Uncategorized"),
+		makeFrame(day.Add(23*time.Hour+30*time.Minute), day.Add(24*time.Hour+30*time.Minute), "RAF", "RAF-299"),
+	}
+	lines := strings.Join(model.aggregateLines(), "\n")
+	for _, want := range []string{"Monday, August 17, 2026", "Tuesday, August 18, 2026", "RAF-326", "FR-889", "#RAF-299", "Uncategorized", "2h 00m 00s", "30m 00s"} {
+		if !strings.Contains(lines, want) {
+			t.Errorf("aggregate view missing %q:\n%s", want, lines)
+		}
+	}
+	model.filter = "redesign"
+	filtered := strings.Join(model.aggregateLines(), "\n")
+	if !strings.Contains(filtered, "Redesign") || strings.Contains(filtered, "RAF") || strings.Contains(filtered, "Uncategorized") {
+		t.Fatalf("filter was not applied to aggregate: %s", filtered)
+	}
+	model.filter = "not-a-project"
+	if got := strings.Join(model.aggregateLines(), "\n"); !strings.Contains(got, "No tracked time matches") {
+		t.Fatalf("missing empty state: %s", got)
+	}
+	model.filter = ""
+	model.rangeIndex = 0
+	today := strings.Join(model.aggregateLines(), "\n")
+	if strings.Contains(today, "Monday, August 17, 2026") || !strings.Contains(today, "Tuesday, August 18, 2026") {
+		t.Fatalf("today range did not filter aggregate days: %s", today)
+	}
+	model.width = 36
+	for i, line := range model.aggregateLines() {
+		if lipgloss.Width(line) > model.contentWidth() {
+			t.Fatalf("aggregate line %d is too wide: %q", i, line)
+		}
+	}
+}
+
+func TestAggregateViewUsesSharedDailySummaryAndScrollBounds(t *testing.T) {
+	model := tuiTestModel()
+	model.rangeIndex = 4
+	options, err := model.tuiOptions(true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := aggregateDaily(model.tuiFrames(true), nil, model.now, options)
+	got := model.aggregateSummaries()
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("TUI summaries differ from shared CLI daily aggregation")
+	}
+	model.screen = tuiAggregate
+	model.height = 10
+	model.scroll = model.maxScroll() + 20
+	model.clampScroll()
+	if model.scroll != model.maxScroll() {
+		t.Fatalf("scroll=%d max=%d", model.scroll, model.maxScroll())
+	}
+	model.Update(tea.WindowSizeMsg{Width: 55, Height: 8})
+	if model.scroll > model.maxScroll() {
+		t.Fatalf("resize left scroll out of bounds: %d > %d", model.scroll, model.maxScroll())
+	}
+}
+
+func TestAggregateViewRendersTitleRangeAndFooterControls(t *testing.T) {
+	model := tuiTestModel()
+	model.screen = tuiAggregate
+	view := model.View()
+	for _, want := range []string{"BURROWTIME", "Aggregate", "AGGREGATE", "Week", "tab", "view"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("aggregate screen missing %q: %s", want, view)
+		}
 	}
 }
 

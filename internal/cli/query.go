@@ -285,14 +285,7 @@ func (a *app) aggregate() *cobra.Command {
 		if e != nil {
 			return e
 		}
-		summaries := []btReport.Summary{}
-		for day := o.From; !day.After(o.To); day = day.AddDate(0, 0, 1) {
-			dayFrom, dayTo := btReport.DayBounds(day, day)
-			daily := o
-			daily.From, daily.To = dayFrom, dayTo
-			frames := btReport.FilterActive(s.Frames, s.RunningTimers(), s.Now(), daily)
-			summaries = append(summaries, btReport.Build(frames, daily))
-		}
+		summaries := aggregateDaily(s.Frames, s.RunningTimers(), s.Now(), o)
 		if q.json {
 			return encodeJSON(cmd.OutOrStdout(), summaries)
 		}
@@ -306,6 +299,20 @@ func (a *app) aggregate() *cobra.Command {
 	q.bind(cmd, false, false)
 	a.bindQueryCompletions(cmd)
 	return cmd
+}
+
+// aggregateDaily applies the CLI aggregate command's day-by-day clipping and
+// reporting rules. The TUI calls the same helper to keep totals consistent.
+func aggregateDaily(frames []store.Frame, timers []store.ActiveTimer, now time.Time, options btReport.Options) []btReport.Summary {
+	summaries := []btReport.Summary{}
+	for day := options.From; !day.After(options.To); day = day.AddDate(0, 0, 1) {
+		dayFrom, dayTo := btReport.DayBounds(day, day)
+		daily := options
+		daily.From, daily.To = dayFrom, dayTo
+		filtered := btReport.FilterActive(frames, timers, now, daily)
+		summaries = append(summaries, btReport.Build(filtered, daily))
+	}
+	return summaries
 }
 
 type logJSONFrame struct {

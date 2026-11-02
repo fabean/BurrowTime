@@ -43,6 +43,7 @@ const (
 	tuiHome tuiScreen = iota
 	tuiLog
 	tuiReport
+	tuiAggregate
 	tuiCommands
 )
 
@@ -95,6 +96,17 @@ var (
 )
 
 var tuiRangeNames = []string{"Today", "Week", "Month", "Year", "All time"}
+
+func nextTUIView(screen tuiScreen) tuiScreen {
+	switch screen {
+	case tuiLog:
+		return tuiReport
+	case tuiReport:
+		return tuiAggregate
+	default:
+		return tuiLog
+	}
+}
 
 func newDashboardModel(dir string) dashboardModel {
 	s, err := watson.Open(dir)
@@ -192,15 +204,17 @@ func (m dashboardModel) updateScreen(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case tuiHome:
 		switch key {
 		case "up", "k":
-			m.cursor = wrapIndex(m.cursor-1, 5)
+			m.cursor = wrapIndex(m.cursor-1, 6)
 		case "down", "j":
-			m.cursor = wrapIndex(m.cursor+1, 5)
+			m.cursor = wrapIndex(m.cursor+1, 6)
 		case "enter":
 			return m.activateQuickAction()
 		case "l":
 			m.openScreen(tuiLog)
 		case "r":
 			m.openScreen(tuiReport)
+		case "a":
+			m.openScreen(tuiAggregate)
 		case "s":
 			m.beginCommand(menuItems[0])
 		case "x":
@@ -220,16 +234,16 @@ func (m dashboardModel) updateScreen(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case "enter":
 			return m.activateMenuItem(menuItems[m.commandCursor])
 		}
-	case tuiLog, tuiReport:
+	case tuiLog, tuiReport, tuiAggregate:
+		if key == "a" {
+			m.openScreen(tuiAggregate)
+			return m, nil
+		}
 		switch key {
 		case "esc", "b":
 			m.openScreen(tuiHome)
 		case "tab":
-			if m.screen == tuiLog {
-				m.openScreen(tuiReport)
-			} else {
-				m.openScreen(tuiLog)
-			}
+			m.openScreen(nextTUIView(m.screen))
 		case "left", "h":
 			m.rangeIndex = wrapIndex(m.rangeIndex-1, len(tuiRangeNames))
 			m.scroll = 0
@@ -272,6 +286,8 @@ func (m *dashboardModel) activateQuickAction() (tea.Model, tea.Cmd) {
 		return *m, tea.Quit
 	case 4:
 		m.openScreen(tuiCommands)
+	case 5:
+		m.openScreen(tuiAggregate)
 	}
 	return *m, nil
 }
@@ -283,6 +299,9 @@ func (m *dashboardModel) activateMenuItem(item menuItem) (tea.Model, tea.Cmd) {
 		return *m, nil
 	case "report":
 		m.openScreen(tuiReport)
+		return *m, nil
+	case "aggregate":
+		m.openScreen(tuiAggregate)
 		return *m, nil
 	}
 	if item.example == "" {
@@ -324,6 +343,8 @@ func (m dashboardModel) View() string {
 		body = m.logView()
 	case tuiReport:
 		body = m.reportView()
+	case tuiAggregate:
+		body = m.aggregateView()
 	case tuiCommands:
 		body = m.commandsView()
 	default:
@@ -384,10 +405,11 @@ func (m dashboardModel) homeView() string {
 		{"Start", "Track a project and tags"},
 		{"Stop", "Finish one or all timers"},
 		{"Commands", "Open every Watson command"},
+		{"Aggregate", "Compare daily project and ticket totals"},
 	}
 	actionWidth := max(32, width/2)
 	actionInnerWidth := max(20, actionWidth-5)
-	shortcuts := []string{"l", "r", "s", "x", "c"}
+	shortcuts := []string{"l", "r", "s", "x", "c", "a"}
 	var actionLines []string
 	for i, action := range actions {
 		marker := "  "
@@ -416,7 +438,7 @@ func (m dashboardModel) homeView() string {
 	} else if m.height >= 30 {
 		main += "\n" + recentPanel
 	}
-	footer := tuiHelp("↑/↓", "move", "enter", "open", "l/r", "views", "s", "start", "q", "quit")
+	footer := tuiHelp("↑/↓", "move", "enter", "open", "l/r/a", "views", "s", "start", "q", "quit")
 	if width < 90 {
 		footer = tuiHelp("↑/↓", "navigate", "enter", "open", "q", "quit")
 	}
@@ -448,7 +470,7 @@ func (m dashboardModel) logView() string {
 	lines := m.logLines()
 	toolbar := m.queryToolbar("LOG", len(m.tuiFrames(false)), "sessions")
 	content, position := m.viewport(lines)
-	footer := m.queryFooter("report")
+	footer := m.queryFooter()
 	return m.header("Log") + "\n\n" + toolbar + "\n\n" + content + "\n" + padBetween(footer, position, m.contentWidth())
 }
 
@@ -533,7 +555,7 @@ func (m dashboardModel) reportView() string {
 	lines := m.reportLines(summary)
 	toolbar := m.queryToolbar("REPORT", len(summary.Projects), "projects")
 	content, position := m.viewport(lines)
-	footer := m.queryFooter("log")
+	footer := m.queryFooter()
 	return m.header("Report") + "\n\n" + toolbar + "\n\n" + content + "\n" + padBetween(footer, position, m.contentWidth())
 }
 
@@ -576,6 +598,69 @@ func (m dashboardModel) reportLines(summary btReport.Summary) []string {
 	return lines
 }
 
+func (m dashboardModel) aggregateView() string {
+	summaries := m.aggregateSummaries()
+	lines := m.aggregateSummaryLines(summaries)
+	days := 0
+	for _, summary := range summaries {
+		if len(summary.Projects) > 0 {
+			days++
+		}
+	}
+	toolbar := m.queryToolbar("AGGREGATE", days, "days")
+	content, position := m.viewport(lines)
+	footer := m.queryFooter()
+	return m.header("Aggregate") + "\n\n" + toolbar + "\n\n" + content + "\n" + padBetween(footer, position, m.contentWidth())
+}
+
+func (m dashboardModel) aggregateLines() []string {
+	return m.aggregateSummaryLines(m.aggregateSummaries())
+}
+
+func (m dashboardModel) aggregateSummaries() []btReport.Summary {
+	options, err := m.tuiOptions(true)
+	if err != nil {
+		return nil
+	}
+	frames := m.tuiFrames(true)
+	return aggregateDaily(frames, nil, m.now, options)
+}
+
+func (m dashboardModel) aggregateSummaryLines(summaries []btReport.Summary) []string {
+	width := m.contentWidth()
+	lines := []string{}
+	for _, summary := range summaries {
+		if len(summary.Projects) == 0 {
+			continue
+		}
+		if len(lines) > 0 {
+			lines = append(lines, "")
+		}
+		day := summary.Timespan.From
+		dayDuration := formatDuration(int64(summary.Time))
+		dayLabel := truncate(day.Format("Monday, January 2, 2006"), max(8, width-lipgloss.Width(dayDuration)-2))
+		dayTitle := tuiBrandStyle.Render(dayLabel)
+		lines = append(lines, padBetween(dayTitle, tuiTimeStyle.Bold(true).Render(dayDuration), width))
+		for projectIndex, project := range summary.Projects {
+			nameWidth := min(32, max(10, width-20))
+			projectLine := "  " + tuiTitleStyle.Foreground(tuiAccent).Render(fmt.Sprintf("%-*s", nameWidth, truncate(project.Name, nameWidth)))
+			lines = append(lines, padBetween(projectLine, tuiTimeStyle.Render(formatDuration(int64(project.Time))), width))
+			for _, tag := range project.Tags {
+				tagWidth := min(40, max(10, width-20))
+				tagLine := "    " + tuiTagStyle.Render("#"+truncate(tag.Name, tagWidth))
+				lines = append(lines, padBetween(tagLine, tuiMutedStyle.Render(formatDuration(int64(tag.Time))), width))
+			}
+			if projectIndex < len(summary.Projects)-1 {
+				lines = append(lines, "")
+			}
+		}
+	}
+	if len(lines) == 0 {
+		return []string{"", tuiMutedStyle.Render("  No tracked time matches this range and filter.")}
+	}
+	return lines
+}
+
 func (m dashboardModel) queryToolbar(kind string, count int, noun string) string {
 	rangeBadge := tuiBadge("‹  " + tuiRangeNames[m.rangeIndex] + "  ›")
 	filterBadge := tuiMutedStyle.Render("/ filter")
@@ -594,11 +679,11 @@ func (m dashboardModel) queryToolbar(kind string, count int, noun string) string
 	return padBetween(left, right, m.contentWidth())
 }
 
-func (m dashboardModel) queryFooter(otherView string) string {
+func (m dashboardModel) queryFooter() string {
 	if m.contentWidth() < 96 {
-		return tuiHelp("←/→", "range", "/", "filter", "j/k", "scroll", "b", "back")
+		return tuiHelp("←/→", "range", "/", "filter", "j/k", "scroll", "tab", "view", "b", "back")
 	}
-	return tuiHelp("←/→", "range", "/", "filter", "j/k", "scroll", "tab", otherView, "b", "back", "q", "quit")
+	return tuiHelp("←/→", "range", "/", "filter", "j/k", "scroll", "tab", "views", "a", "aggregate", "b", "back", "q", "quit")
 }
 
 func (m dashboardModel) commandsView() string {
@@ -729,6 +814,9 @@ func (m dashboardModel) currentLineCount() int {
 		options, _ := m.tuiOptions(true)
 		summary := btReport.Build(m.tuiFrames(true), options)
 		return len(m.reportLines(summary))
+	}
+	if m.screen == tuiAggregate {
+		return len(m.aggregateLines())
 	}
 	return 0
 }
