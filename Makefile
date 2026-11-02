@@ -40,4 +40,5 @@ demos: build
 	vhs docs/vhs/aggregate-tui.tape
 	vhs docs/vhs/session-messages.tape
 	vhs docs/vhs/session-messages-tui.tape
+	vhs docs/vhs/session-wizard.tape
 	vhs docs/vhs/tui.tape

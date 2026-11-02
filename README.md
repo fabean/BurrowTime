@@ -555,6 +555,10 @@ burrowtime add --interactive
 burrowtime add -i
 ```
 
+<p align="center">
+  <img src="assets/burrowtime-session-wizard.gif" alt="BurrowTime guiding a user through starting a timer and adding a completed session with interactive prompts" width="900">
+</p>
+
 Type to search projects, use the arrow keys to browse suggestions, and press
 Enter to select. Use Ctrl+N to create a new project. At the tag step, enter
 multiple tags separated by commas or press Tab to add a suggested tag; Enter
