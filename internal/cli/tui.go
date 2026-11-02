@@ -280,14 +280,14 @@ func (m *dashboardModel) activateQuickAction() (tea.Model, tea.Cmd) {
 	case 1:
 		m.openScreen(tuiReport)
 	case 2:
-		m.beginCommand(menuItems[0])
+		m.openScreen(tuiAggregate)
 	case 3:
+		m.beginCommand(menuItems[0])
+	case 4:
 		m.choice = []string{"stop"}
 		return *m, tea.Quit
-	case 4:
-		m.openScreen(tuiCommands)
 	case 5:
-		m.openScreen(tuiAggregate)
+		m.openScreen(tuiCommands)
 	}
 	return *m, nil
 }
@@ -402,14 +402,14 @@ func (m dashboardModel) homeView() string {
 	actions := []struct{ label, detail string }{
 		{"Log", "Browse individual sessions"},
 		{"Report", "Compare projects and totals"},
+		{"Aggregate", "Compare daily project and ticket totals"},
 		{"Start", "Track a project and tags"},
 		{"Stop", "Finish one or all timers"},
 		{"Commands", "Open every Watson command"},
-		{"Aggregate", "Compare daily project and ticket totals"},
 	}
 	actionWidth := max(32, width/2)
 	actionInnerWidth := max(20, actionWidth-5)
-	shortcuts := []string{"l", "r", "s", "x", "c", "a"}
+	shortcuts := []string{"l", "r", "a", "s", "x", "c"}
 	var actionLines []string
 	for i, action := range actions {
 		marker := "  "

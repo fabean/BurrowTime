@@ -52,6 +52,25 @@ func TestDashboardCyclesBetweenLogReportAndAggregateViews(t *testing.T) {
 	}
 }
 
+func TestDashboardQuickActionOrderAndSelection(t *testing.T) {
+	model := tuiTestModel()
+	view := model.homeView()
+	logIndex, reportIndex, aggregateIndex := strings.Index(view, "Log"), strings.Index(view, "Report"), strings.Index(view, "Aggregate")
+	if logIndex < 0 || reportIndex <= logIndex || aggregateIndex <= reportIndex {
+		t.Fatalf("quick action order is wrong: %s", view)
+	}
+	model.cursor = 2
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if got := updated.(dashboardModel).screen; got != tuiAggregate {
+		t.Fatalf("third quick action opened screen %v, want aggregate", got)
+	}
+	model.cursor = 3
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if got := updated.(dashboardModel); got.inputMode != tuiInputCommand || got.command.name != "start" {
+		t.Fatalf("fourth quick action should still start: %#v", got)
+	}
+}
+
 func TestAggregateViewGroupsDailyProjectAndTagTotals(t *testing.T) {
 	model := tuiTestModel()
 	model.now = time.Date(2026, time.August, 18, 13, 0, 0, 0, time.UTC)
@@ -154,7 +173,7 @@ func TestDashboardFilterMatchesProjectsTagsAndIDs(t *testing.T) {
 
 func TestDashboardCommandLauncherReturnsExistingCLIArguments(t *testing.T) {
 	model := tuiTestModel()
-	model.cursor = 2
+	model.cursor = 3
 	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	model = updated.(dashboardModel)
 	if model.inputMode != tuiInputCommand || model.command.name != "start" {
