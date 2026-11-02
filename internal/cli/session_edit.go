@@ -283,6 +283,8 @@ func (m sessionEditModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			m.field = sessionEditField(wrapIndex(int(m.field)-1, 6))
 		case "down", "j", "tab":
 			m.field = sessionEditField(wrapIndex(int(m.field)+1, 6))
+		case "ctrl+s":
+			m.beginConfirmation()
 		case "enter":
 			if m.field == editSave {
 				m.beginConfirmation()
@@ -477,7 +479,7 @@ func (m sessionEditModel) View() string {
 	if m.errorText != "" {
 		lines = append(lines, "", tuiTitleStyle.Foreground(tuiWarning).Bold(true).Render(m.errorText))
 	}
-	help := tuiHelp("↑/↓", "field", "enter", "edit/save", "tab", "next", "esc", "cancel")
+	help := tuiHelp("↑/↓", "field", "enter", "edit/select", "ctrl+s", "save", "esc", "cancel")
 	if m.editing {
 		help = tuiHelp("type", "edit value", "ctrl+u", "clear", "enter", "apply", "esc", "keep current")
 	}

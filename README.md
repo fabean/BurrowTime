@@ -396,8 +396,9 @@ dates. Untagged time remains included in project and daily totals.
 From Log, press `e` to select a completed session, use arrows or `j`/`k` to
 move, and press Enter to edit it. Press `/` to search by project, tag, date,
 or session ID. In the editor, use arrows or Tab to choose a field, press Enter
-to edit it, and use Ctrl+U to clear a field before typing. Select **Save
-Changes** and confirm the summary to write the update. Esc cancels selection,
+to edit it, and use Ctrl+U to clear a field before typing. Press Ctrl+S from
+the form to review the save summary, then press Enter to confirm. You can also
+select **Save Changes** and press Enter. Esc cancels selection,
 the current field edit, or the editor without saving. The selection list skips
 active timers and completed agent-owned sessions; use the existing `edit ID`
 command for an active primary timer.

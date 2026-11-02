@@ -164,6 +164,24 @@ func TestInteractiveEditNonTTYDoesNotModifySession(t *testing.T) {
 	}
 }
 
+func TestSessionEditCtrlSSavesFromAnySelectedField(t *testing.T) {
+	start := time.Date(2026, time.October, 26, 9, 0, 0, 0, time.Local)
+	stopUnix := start.Add(time.Hour).Unix()
+	frame := store.Frame{Start: start.Unix(), Stop: &stopUnix, Project: "RAF", ID: "aaaaaaaaaaaaaaaa"}
+	model := newSessionEditModel(frame, frame.ID, start.Add(2*time.Hour))
+	if !strings.Contains(model.View(), "ctrl+s") {
+		t.Fatalf("form help does not advertise Ctrl+S: %s", model.View())
+	}
+	model, _ = sessionEditUpdate(model, tea.KeyMsg{Type: tea.KeyCtrlS})
+	if !model.confirm || model.confirmed {
+		t.Fatalf("Ctrl+S should open confirmation without skipping it: %#v", model)
+	}
+	model, _ = sessionEditUpdate(model, tea.KeyMsg{Type: tea.KeyEnter})
+	if !model.confirmed {
+		t.Fatal("confirmation Enter did not approve save")
+	}
+}
+
 func sessionPickerUpdate(model sessionPickerModel, msg tea.KeyMsg) (sessionPickerModel, tea.Cmd) {
 	updated, command := model.Update(msg)
 	return updated.(sessionPickerModel), command

@@ -231,6 +231,68 @@ func TestLogEditSelectionNavigatesOpensCancelsAndSavesInPlace(t *testing.T) {
 	}
 }
 
+func TestLogEditTimestampChangesRefreshDuration(t *testing.T) {
+	model := tuiTestModel()
+	repo, err := store.New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	model.service.Repo = repo
+	start := time.Date(2026, time.August, 17, 7, 15, 28, 0, time.UTC)
+	stop := time.Date(2026, time.August, 17, 7, 29, 0, 0, time.UTC).Unix()
+	model.service.Frames[0].Start = start.Unix()
+	model.service.Frames[0].Stop = &stop
+	if err := repo.SaveFrames(model.service.Frames); err != nil {
+		t.Fatal(err)
+	}
+	model.screen = tuiLog
+	model.rangeIndex = 4
+
+	press := func(key tea.KeyMsg) {
+		t.Helper()
+		updated, _ := model.Update(key)
+		model = updated.(dashboardModel)
+	}
+	press(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}})
+	press(tea.KeyMsg{Type: tea.KeyEnter})
+	press(tea.KeyMsg{Type: tea.KeyDown}) // Tags
+	press(tea.KeyMsg{Type: tea.KeyDown}) // Start
+	press(tea.KeyMsg{Type: tea.KeyEnter})
+	press(tea.KeyMsg{Type: tea.KeyCtrlU})
+	press(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("2026-08-17 07:15:00")})
+	press(tea.KeyMsg{Type: tea.KeyEnter})
+	press(tea.KeyMsg{Type: tea.KeyDown}) // End
+	press(tea.KeyMsg{Type: tea.KeyEnter})
+	press(tea.KeyMsg{Type: tea.KeyCtrlU})
+	press(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("2026-08-17 07:30:00")})
+	press(tea.KeyMsg{Type: tea.KeyEnter})
+	press(tea.KeyMsg{Type: tea.KeyDown}) // Message
+	press(tea.KeyMsg{Type: tea.KeyDown}) // Save Changes
+	press(tea.KeyMsg{Type: tea.KeyEnter})
+	if model.editForm == nil || !model.editForm.confirm {
+		t.Fatalf("timestamp edit did not reach confirmation: %#v", model.editForm)
+	}
+	press(tea.KeyMsg{Type: tea.KeyEnter})
+
+	frame := model.service.Frames[0]
+	if frame.Start != start.Truncate(time.Minute).Unix() || frame.Stop == nil || *frame.Stop != time.Date(2026, time.August, 17, 7, 30, 0, 0, time.UTC).Unix() {
+		t.Fatalf("timestamps were not saved: %#v", frame)
+	}
+	if got := *frame.Stop - frame.Start; got != 15*60 {
+		t.Fatalf("saved duration=%d, want 900 seconds", got)
+	}
+	if !strings.Contains(strings.Join(model.logLines(), "\n"), "15m 00s") {
+		t.Fatalf("Log did not refresh to 15 minutes: %s", strings.Join(model.logLines(), "\n"))
+	}
+	persisted, err := repo.LoadFrames()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(persisted) == 0 || persisted[0].Start != frame.Start || persisted[0].Stop == nil || *persisted[0].Stop != *frame.Stop {
+		t.Fatalf("edited timestamps were not persisted: %#v", persisted)
+	}
+}
+
 func TestLogEditSelectionScrollsAndStaysVisibleAfterResize(t *testing.T) {
 	model := tuiTestModel()
 	model.screen = tuiLog
