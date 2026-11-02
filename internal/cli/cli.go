@@ -658,6 +658,93 @@ func parseTime(value string, now time.Time) (time.Time, error) {
 	return time.Time{}, invalidTime(value)
 }
 
+var minutePrecisionTimeInput = regexp.MustCompile(`(?i)(?:^|[ T])(?:\d{1,2}:\d{2}(?:\s*(?:AM|PM))?|\d{1,2}\s*(?:AM|PM))$`)
+var secondPrecisionTimeInput = regexp.MustCompile(`(?i)(?:^|[ T])\d{1,2}:\d{2}:\d{2}(?:\.\d+)?(?:\s*(?:AM|PM))?$`)
+
+// hasMinutePrecision reports whether an input specifies a time but omits
+// seconds. Date-only inputs and timestamps with explicit seconds retain their
+// existing precision and validation behavior.
+func hasMinutePrecision(value string) bool {
+	value = strings.TrimSpace(value)
+	return minutePrecisionTimeInput.MatchString(value) && !secondPrecisionTimeInput.MatchString(value)
+}
+
+func minutePrecisionEnabled(s *watson.Service, burrowtime bool) bool {
+	return burrowtime && strings.EqualFold(s.Config.Get("options", "time_precision", "second"), "minute")
+}
+
+func floorMinute(value time.Time) time.Time { return value.Truncate(time.Minute) }
+
+func sameLocalMinute(a, b time.Time) bool {
+	ay, am, ad := a.Date()
+	by, bm, bd := b.In(a.Location()).Date()
+	return ay == by && am == bm && ad == bd && a.Hour() == b.In(a.Location()).Hour() && a.Minute() == b.In(a.Location()).Minute()
+}
+
+func withinSameMinute(a, b time.Time) bool {
+	if !sameLocalMinute(a, b) {
+		return false
+	}
+	delta := a.Unix() - b.Unix()
+	if delta < 0 {
+		delta = -delta
+	}
+	return delta < 60
+}
+
+func isAgentTimer(s *watson.Service, timerID string) bool {
+	for _, session := range s.AgentSessions {
+		if session.TimerID == timerID && session.Running() {
+			return true
+		}
+	}
+	return false
+}
+
+func isAgentTimerRef(s *watson.Service, timerRef string) bool {
+	for _, timer := range s.RunningTimers() {
+		if timer.ID == timerRef || strings.HasPrefix(timer.ID, timerRef) {
+			return isAgentTimer(s, timer.ID)
+		}
+	}
+	return false
+}
+
+func floorAllStops(s *watson.Service) *time.Time {
+	stop := floorMinute(s.Now())
+	return &stop
+}
+
+func stopAllTimers(s *watson.Service, at *time.Time, minuteMode bool) ([]store.Frame, error) {
+	if minuteMode {
+		return s.StopAllMinute(at)
+	}
+	return s.StopAll(at)
+}
+
+func alignStopMinuteBoundary(s *watson.Service, timerRef string, requested *time.Time, enabled bool) *time.Time {
+	if requested == nil || !enabled {
+		return requested
+	}
+	var selected *store.ActiveTimer
+	matches := 0
+	for _, timer := range s.RunningTimers() {
+		if timer.ID == timerRef || strings.HasPrefix(timer.ID, timerRef) {
+			copyTimer := timer
+			selected = &copyTimer
+			matches++
+		}
+	}
+	if matches != 1 || selected == nil || isAgentTimer(s, selected.ID) || requested.Unix() >= selected.Start {
+		return requested
+	}
+	started := time.Unix(selected.Start, 0).In(requested.Location())
+	if !withinSameMinute(*requested, started) {
+		return requested
+	}
+	return &started
+}
+
 func invalidTime(value string) error {
 	return fmt.Errorf("Invalid time '%s'. Use a time such as '9:30 AM' or '14:30', optionally with a date such as '2026-10-26 2:30 PM'.", value)
 }
@@ -761,6 +848,9 @@ func (a *app) start() *cobra.Command {
 				return e
 			}
 			when = &parsed
+		} else if minutePrecisionEnabled(s, a.name != "watson") {
+			parsed := floorMinute(s.Now())
+			when = &parsed
 		}
 		reader := bufio.NewReader(cmd.InOrStdin())
 		if s.Config.Bool("options", "confirm_new_project", false) || confirmProject {
@@ -822,12 +912,26 @@ func (a *app) start() *cobra.Command {
 					return err
 				}
 			} else {
-				stopped, stopErr := s.StopAll(when)
+				minuteMode := at == "" && minutePrecisionEnabled(s, true)
+				stopAt := when
+				if minuteMode {
+					stopAt = floorAllStops(s)
+				}
+				stopped, stopErr := stopAllTimers(s, stopAt, minuteMode)
 				if stopErr != nil {
 					return stopErr
 				}
 				if stopSet && stopRunning && !jsonOutput {
 					fmt.Fprintf(cmd.OutOrStdout(), "Stopped %d running %s.\n", len(stopped), plural(len(stopped), "timer", "timers"))
+				}
+			}
+		}
+		if a.name != "watson" && !concurrent && gap && when != nil && (hasMinutePrecision(at) || at == "" && minutePrecisionEnabled(s, true)) && len(s.Frames) > 0 {
+			previous := s.Frames[len(s.Frames)-1]
+			if previous.Stop != nil {
+				previousStop := time.Unix(*previous.Stop, 0).In(when.Location())
+				if when.Unix() < *previous.Stop && withinSameMinute(*when, previousStop) {
+					when = &previousStop
 				}
 			}
 		}
@@ -904,6 +1008,9 @@ func (a *app) stop() *cobra.Command {
 			return err
 		}
 		if a.name != "watson" {
+			// Stopping should remain available even if the optional config file
+			// cannot be read; in that case, retain the default second precision.
+			_ = s.LoadConfig()
 			if _, err := s.RecoverExpiredAgentSessions(); err != nil {
 				return err
 			}
@@ -916,11 +1023,15 @@ func (a *app) stop() *cobra.Command {
 			}
 			when = &parsed
 		}
+		minutePrecision := minutePrecisionEnabled(s, a.name != "watson")
 		if all && timerRef != "" {
 			return errors.New("--all and --timer are mutually exclusive")
 		}
 		if all {
-			frames, stopErr := s.StopAll(when)
+			if at == "" && minutePrecision {
+				when = floorAllStops(s)
+			}
+			frames, stopErr := stopAllTimers(s, when, at == "" && minutePrecision)
 			if stopErr != nil {
 				return stopErr
 			}
@@ -930,6 +1041,11 @@ func (a *app) stop() *cobra.Command {
 			return nil
 		}
 		if timerRef != "" {
+			if at == "" && minutePrecision && !isAgentTimerRef(s, timerRef) {
+				parsed := floorMinute(s.Now())
+				when = &parsed
+			}
+			when = alignStopMinuteBoundary(s, timerRef, when, a.name != "watson" && (at == "" && minutePrecision || hasMinutePrecision(at)))
 			frame, stopErr := s.StopTimer(timerRef, when)
 			if stopErr != nil {
 				return stopErr
@@ -942,6 +1058,11 @@ func (a *app) stop() *cobra.Command {
 			return errors.New("No project started.")
 		}
 		if len(timers) == 1 || a.name == "watson" {
+			if at == "" && minutePrecision && !isAgentTimer(s, timers[0].ID) {
+				parsed := floorMinute(s.Now())
+				when = &parsed
+			}
+			when = alignStopMinuteBoundary(s, timers[0].ID, when, a.name != "watson" && (at == "" && minutePrecision || hasMinutePrecision(at)))
 			frame, stopErr := s.StopTimer(timers[0].ID, when)
 			if stopErr != nil {
 				return stopErr
@@ -959,7 +1080,10 @@ func (a *app) stop() *cobra.Command {
 			return pickErr
 		}
 		if selection == stopAllSelection {
-			frames, stopErr := s.StopAll(when)
+			if at == "" && minutePrecision {
+				when = floorAllStops(s)
+			}
+			frames, stopErr := stopAllTimers(s, when, at == "" && minutePrecision)
 			if stopErr != nil {
 				return stopErr
 			}
@@ -968,6 +1092,11 @@ func (a *app) stop() *cobra.Command {
 			}
 			return nil
 		}
+		if at == "" && minutePrecision && !isAgentTimer(s, selection) {
+			parsed := floorMinute(s.Now())
+			when = &parsed
+		}
+		when = alignStopMinuteBoundary(s, selection, when, a.name != "watson" && (at == "" && minutePrecision || hasMinutePrecision(at)))
 		frame, stopErr := s.StopTimer(selection, when)
 		if stopErr != nil {
 			return stopErr
@@ -1081,6 +1210,9 @@ func (a *app) restart() *cobra.Command {
 		if e != nil {
 			return e
 		}
+		if a.name != "watson" {
+			_ = s.LoadConfig()
+		}
 		ref := "-1"
 		if len(args) > 0 {
 			ref = args[0]
@@ -1091,6 +1223,9 @@ func (a *app) restart() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			when = &parsed
+		} else if minutePrecisionEnabled(s, a.name != "watson") {
+			parsed := floorMinute(s.Now())
 			when = &parsed
 		}
 		timers := s.RunningTimers()
@@ -1111,8 +1246,15 @@ func (a *app) restart() *cobra.Command {
 					if _, e = s.Stop(nil); e != nil {
 						return e
 					}
-				} else if _, e = s.StopAll(nil); e != nil {
-					return e
+				} else {
+					minuteMode := minutePrecisionEnabled(s, true)
+					var stopAt *time.Time
+					if minuteMode {
+						stopAt = floorAllStops(s)
+					}
+					if _, e = stopAllTimers(s, stopAt, minuteMode); e != nil {
+						return e
+					}
 				}
 			} else {
 				return fmt.Errorf("Project already started: %s%s", timers[0].Project, formatTags(timers[0].Tags))

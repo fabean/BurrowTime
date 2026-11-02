@@ -466,6 +466,20 @@ burrowtime add --from "2026-10-26 9:30 AM" --to "2026-10-26 11:15 AM" RAF +RAF-3
 burrowtime stop --at "yesterday 2:30 PM"
 ```
 
+Live timers retain second-level start and stop times by default. To floor
+automatically captured live timer boundaries to the start of the current
+minute, enable minute precision:
+
+```bash
+burrowtime config options.time_precision minute
+```
+
+This applies to ordinary BurrowTime starts, stops, restarts, and concurrent
+human timers. Explicit timestamps without seconds already resolve to `:00`;
+explicit seconds are preserved. Agent-owned timers and existing saved sessions
+are not rewritten. Set `options.time_precision` to `second` to restore the
+default behavior.
+
 For overnight sessions, provide explicit dates on both endpoints so the end
 date is unambiguous. BurrowTime does not silently advance an end time to the
 next day.

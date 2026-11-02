@@ -70,7 +70,13 @@ func (a *app) edit() *cobra.Command {
 				fmt.Fprintln(cmd.OutOrStdout(), "No change made.")
 				return nil
 			}
-			parsed, err := parseEditDocument(edited, !editingCurrent, s.Now())
+			startDefault := s.Now()
+			stopDefault := s.Now()
+			startDefault = time.Unix(frame.Start, 0).In(displayLoc)
+			if !editingCurrent && frame.Stop != nil {
+				stopDefault = time.Unix(*frame.Stop, 0).In(displayLoc)
+			}
+			parsed, err := parseEditDocumentOnDates(edited, !editingCurrent, s.Now(), startDefault, stopDefault)
 			if err != nil {
 				fmt.Fprintf(cmd.ErrOrStderr(), "Error while parsing inputted values: %v\n", err)
 				fmt.Fprintln(cmd.ErrOrStderr(), "Press any key to continue...")
@@ -120,6 +126,10 @@ type parsedEdit struct {
 }
 
 func parseEditDocument(data []byte, needStop bool, now time.Time) (parsedEdit, error) {
+	return parseEditDocumentOnDates(data, needStop, now, now, now)
+}
+
+func parseEditDocumentOnDates(data []byte, needStop bool, now, startDefault, stopDefault time.Time) (parsedEdit, error) {
 	var raw map[string]json.RawMessage
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return parsedEdit{}, err
@@ -138,13 +148,13 @@ func parseEditDocument(data []byte, needStop bool, now time.Time) (parsedEdit, e
 	if err := json.Unmarshal(data, &doc); err != nil {
 		return parsedEdit{}, err
 	}
-	start, err := parseTime(doc.Start, now)
+	start, err := parseTime(doc.Start, startDefault)
 	if err != nil {
 		return parsedEdit{}, err
 	}
 	result := parsedEdit{Project: doc.Project, Tags: doc.Tags, Start: start}
 	if needStop {
-		stop, err := parseTime(doc.Stop, now)
+		stop, err := parseTime(doc.Stop, stopDefault)
 		if err != nil {
 			return parsedEdit{}, err
 		}

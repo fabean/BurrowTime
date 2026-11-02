@@ -55,6 +55,35 @@ func TestStartStopUsesWatsonDirectoryWithoutMigration(t *testing.T) {
 	}
 }
 
+func TestStopAllMinuteFloorsHumanTimerAndPreservesAgentTimestamp(t *testing.T) {
+	dir := t.TempDir()
+	repo, err := store.New(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := time.Now().Truncate(time.Minute)
+	now := base.Add(45 * time.Second)
+	started := base.Add(30 * time.Second).Unix()
+	s := &Service{
+		Repo:          repo,
+		Now:           func() time.Time { return now },
+		State:         store.State{Project: "agent", Start: started, Tags: []string{}},
+		Concurrent:    []store.ActiveTimer{{ID: "human-timer", Project: "human", Start: started, Tags: []string{}}},
+		AgentSessions: []store.AgentSession{{ID: "agent-session", TimerID: PrimaryTimerID, Status: store.AgentSessionActive}},
+	}
+	minuteBoundary := base
+	frames, err := s.StopAllMinute(&minuteBoundary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(frames) != 2 || *frames[0].Stop != now.Unix() {
+		t.Fatalf("agent-owned stop timestamp changed: %#v", frames)
+	}
+	if frames[1].Start != started || *frames[1].Stop != started {
+		t.Fatalf("human timer should align safely at its start: %#v", frames[1])
+	}
+}
+
 func TestPrefixAndNegativeLookup(t *testing.T) {
 	s := &Service{Frames: []store.Frame{{ID: "aaa111", Project: "first"}, {ID: "aaa222", Project: "second"}}}
 	if f, _, err := s.Lookup("aaa"); err != nil || f.Project != "first" {

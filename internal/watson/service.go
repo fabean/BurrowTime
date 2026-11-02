@@ -261,6 +261,16 @@ func (s *Service) stopTimer(ref string, at *time.Time, sessionID string, status 
 // StopAll stops every running timer at one shared timestamp and persists all
 // resulting frames in a single frames-file update.
 func (s *Service) StopAll(at *time.Time) ([]store.Frame, error) {
+	return s.stopAll(at, false)
+}
+
+// StopAllMinute stops human timers at the supplied minute boundary while
+// preserving the current timestamp for agent-owned timers.
+func (s *Service) StopAllMinute(at *time.Time) ([]store.Frame, error) {
+	return s.stopAll(at, true)
+}
+
+func (s *Service) stopAll(at *time.Time, minuteMode bool) ([]store.Frame, error) {
 	timers := s.RunningTimers()
 	if len(timers) == 0 {
 		return nil, errors.New("No project started.")
@@ -271,7 +281,26 @@ func (s *Service) StopAll(at *time.Time) ([]store.Frame, error) {
 	}
 	stopped := make([]store.Frame, 0, len(timers))
 	for _, timer := range timers {
-		frame, err := s.stoppedFrame(timer, stop)
+		stopAt := stop
+		agentOwned := false
+		for _, session := range s.AgentSessions {
+			if session.TimerID == timer.ID && session.Running() {
+				agentOwned = true
+				break
+			}
+		}
+		if minuteMode && agentOwned {
+			stopAt = s.Now()
+		} else if !agentOwned && stop.Unix() < timer.Start {
+			started := time.Unix(timer.Start, 0).In(stop.Location())
+			delta := timer.Start - stop.Unix()
+			sy, sm, sd := started.Date()
+			y, m, d := stop.Date()
+			if delta < 60 && sy == y && sm == m && sd == d && started.Hour() == stop.Hour() && started.Minute() == stop.Minute() {
+				stopAt = started
+			}
+		}
+		frame, err := s.stoppedFrame(timer, stopAt)
 		if err != nil {
 			return nil, err
 		}
@@ -292,7 +321,7 @@ func (s *Service) StopAll(at *time.Time) ([]store.Frame, error) {
 	sessions := append([]store.AgentSession(nil), s.AgentSessions...)
 	sessionsChanged := false
 	for i, timer := range timers {
-		updated, changed, updateErr := stoppedAgentSessions(sessions, timer.ID, "", stopped[i], stop.Unix(), "", store.AgentSessionManuallyStopped)
+		updated, changed, updateErr := stoppedAgentSessions(sessions, timer.ID, "", stopped[i], *stopped[i].Stop, "", store.AgentSessionManuallyStopped)
 		if updateErr != nil {
 			return nil, updateErr
 		}
