@@ -372,15 +372,24 @@ MCP version, skill targets, session states, and individual features.
 | --- | --- |
 | `↑` / `↓`, `j` / `k` | Move or scroll |
 | `enter` | Open the selected action |
-| `l` / `r` | Open Log or Report |
+| `l` / `r` / `a` | Open Log, Report, or Aggregate from the dashboard |
 | `s` / `x` | Start or stop a timer |
 | `←` / `→` | Change the report range |
 | `/` | Filter by project, tag, frame ID, or date |
-| `tab` | Switch between Log and Report |
+| `tab` | Cycle between Log, Report, and Aggregate |
 | `b` / `esc` | Go back |
 | `q` | Quit |
 
 Mouse-wheel scrolling also works in the Log and Report views.
+
+The Aggregate view groups the selected date range by day, project, and
+ticket/tag. It uses the same range selector and text filter as Log and Report;
+press `←`/`→` to change the range and `/` to filter projects, tags, IDs, or
+dates. Untagged time remains included in project and daily totals.
+
+<p align="center">
+  <img src="assets/burrowtime-aggregate-tui.gif" alt="BurrowTime Aggregate TUI grouping daily totals by project and ticket, including untagged time" width="900">
+</p>
 
 ## Export time to Clockify
 
