@@ -70,7 +70,13 @@ func (a *app) edit() *cobra.Command {
 				fmt.Fprintln(cmd.OutOrStdout(), "No change made.")
 				return nil
 			}
-			parsed, err := parseEditDocument(edited, !editingCurrent, s.Now())
+			startDefault := s.Now()
+			stopDefault := s.Now()
+			startDefault = time.Unix(frame.Start, 0).In(displayLoc)
+			if !editingCurrent && frame.Stop != nil {
+				stopDefault = time.Unix(*frame.Stop, 0).In(displayLoc)
+			}
+			parsed, err := parseEditDocumentOnDates(edited, !editingCurrent, s.Now(), startDefault, stopDefault)
 			if err != nil {
 				fmt.Fprintf(cmd.ErrOrStderr(), "Error while parsing inputted values: %v\n", err)
 				fmt.Fprintln(cmd.ErrOrStderr(), "Press any key to continue...")
@@ -120,6 +126,10 @@ type parsedEdit struct {
 }
 
 func parseEditDocument(data []byte, needStop bool, now time.Time) (parsedEdit, error) {
+	return parseEditDocumentOnDates(data, needStop, now, now, now)
+}
+
+func parseEditDocumentOnDates(data []byte, needStop bool, now, startDefault, stopDefault time.Time) (parsedEdit, error) {
 	var raw map[string]json.RawMessage
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return parsedEdit{}, err
@@ -138,26 +148,16 @@ func parseEditDocument(data []byte, needStop bool, now time.Time) (parsedEdit, e
 	if err := json.Unmarshal(data, &doc); err != nil {
 		return parsedEdit{}, err
 	}
-	loc := now.Location()
-	if tz := os.Getenv("TZ"); tz != "" {
-		loaded, err := time.LoadLocation(tz)
-		if err != nil {
-			return parsedEdit{}, err
-		}
-		loc = loaded
-	}
-	parsedStart, err := time.Parse("2006-01-02 15:04:05", doc.Start)
+	start, err := parseTime(doc.Start, startDefault)
 	if err != nil {
 		return parsedEdit{}, err
 	}
-	start := localWallTime(parsedStart.Year(), parsedStart.Month(), parsedStart.Day(), parsedStart.Hour(), parsedStart.Minute(), parsedStart.Second(), 0, loc)
 	result := parsedEdit{Project: doc.Project, Tags: doc.Tags, Start: start}
 	if needStop {
-		parsedStop, err := time.Parse("2006-01-02 15:04:05", doc.Stop)
+		stop, err := parseTime(doc.Stop, stopDefault)
 		if err != nil {
 			return parsedEdit{}, err
 		}
-		stop := localWallTime(parsedStop.Year(), parsedStop.Month(), parsedStop.Day(), parsedStop.Hour(), parsedStop.Minute(), parsedStop.Second(), 0, loc)
 		result.Stop = stop
 		if start.After(stop) {
 			return parsedEdit{}, errors.New("Task cannot end before it starts.")

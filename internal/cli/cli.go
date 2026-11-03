@@ -556,6 +556,7 @@ func parseProjectTags(args []string) (string, []string) {
 }
 
 func parseTime(value string, now time.Time) (time.Time, error) {
+	value = strings.TrimSpace(value)
 	loc := now.Location()
 	if tz := os.Getenv("TZ"); tz != "" {
 		loaded, err := time.LoadLocation(tz)
@@ -564,6 +565,48 @@ func parseTime(value string, now time.Time) (time.Time, error) {
 		}
 		loc = loaded
 		now = now.In(loc)
+	}
+	if strings.EqualFold(value, "today") || strings.EqualFold(value, "yesterday") {
+		date := now
+		if strings.EqualFold(value, "yesterday") {
+			date = date.AddDate(0, 0, -1)
+		}
+		return localWallTime(date.Year(), date.Month(), date.Day(), 0, 0, 0, 0, loc), nil
+	}
+	// Parse an AM/PM suffix before the legacy layouts. The date is optional;
+	// when absent, use today's date in the selected local timezone.
+	upper := strings.ToUpper(value)
+	if strings.HasSuffix(upper, "AM") || strings.HasSuffix(upper, "PM") {
+		clockText := strings.TrimSpace(value[:len(value)-2])
+		dateText := ""
+		if split := strings.LastIndexAny(clockText, " \t"); split >= 0 {
+			candidateDate, candidateClock := strings.TrimSpace(clockText[:split]), strings.TrimSpace(clockText[split+1:])
+			if _, _, _, _, ok := parseClock(candidateClock + " " + upper[len(upper)-2:]); ok {
+				dateText, clockText = candidateDate, candidateClock
+			}
+		}
+		clock, err := parseTwelveHour(clockText + " " + upper[len(upper)-2:])
+		if err != nil {
+			return time.Time{}, invalidTime(value)
+		}
+		date := now
+		if dateText != "" {
+			if strings.EqualFold(dateText, "today") {
+				date = now
+			} else if strings.EqualFold(dateText, "yesterday") {
+				date = now.AddDate(0, 0, -1)
+			} else {
+				parsedDate, ok := parseDateOnly(dateText)
+				if !ok {
+					return time.Time{}, invalidTime(value)
+				}
+				date = parsedDate
+			}
+		}
+		return localWallTime(date.Year(), date.Month(), date.Day(), clock.Hour(), clock.Minute(), clock.Second(), 0, loc), nil
+	}
+	if _, hour, minute, second, ok := parseClock(value); ok {
+		return localWallTime(now.Year(), now.Month(), now.Day(), hour, minute, second, 0, loc), nil
 	}
 	for _, layout := range []string{time.RFC3339Nano, "2006-01-02 15:04:05.999999999Z07:00", "2006-01-02 15:04:05Z07:00", "2006-01-02T15:04:05.999999999", "2006-01-02 15:04:05.999999999", "2006-1-2 15:04:05", "2006-1-2T15:04:05", "2006-1-2 15:04", "2006-1-2T15:04", "2006-1-2 15", "2006-1-2T15", "2006-1-2", "2006/1/2", "2006.1.2", "20060102", "2006-002", "2006-01", "2006"} {
 		if parsed, err := time.Parse(layout, value); err == nil {
@@ -612,7 +655,135 @@ func parseTime(value string, now time.Time) (time.Time, error) {
 			return localWallTime(now.Year(), now.Month(), now.Day(), parsed.Hour(), parsed.Minute(), parsed.Second(), 0, loc), nil
 		}
 	}
-	return time.Time{}, fmt.Errorf("Could not match value '%s' to any supported date format", value)
+	return time.Time{}, invalidTime(value)
+}
+
+var minutePrecisionTimeInput = regexp.MustCompile(`(?i)(?:^|[ T])(?:\d{1,2}:\d{2}(?:\s*(?:AM|PM))?|\d{1,2}\s*(?:AM|PM))$`)
+var secondPrecisionTimeInput = regexp.MustCompile(`(?i)(?:^|[ T])\d{1,2}:\d{2}:\d{2}(?:\.\d+)?(?:\s*(?:AM|PM))?$`)
+
+// hasMinutePrecision reports whether an input specifies a time but omits
+// seconds. Date-only inputs and timestamps with explicit seconds retain their
+// existing precision and validation behavior.
+func hasMinutePrecision(value string) bool {
+	value = strings.TrimSpace(value)
+	return minutePrecisionTimeInput.MatchString(value) && !secondPrecisionTimeInput.MatchString(value)
+}
+
+func minutePrecisionEnabled(s *watson.Service, burrowtime bool) bool {
+	return burrowtime && strings.EqualFold(s.Config.Get("options", "time_precision", "second"), "minute")
+}
+
+func floorMinute(value time.Time) time.Time { return value.Truncate(time.Minute) }
+
+func sameLocalMinute(a, b time.Time) bool {
+	ay, am, ad := a.Date()
+	by, bm, bd := b.In(a.Location()).Date()
+	return ay == by && am == bm && ad == bd && a.Hour() == b.In(a.Location()).Hour() && a.Minute() == b.In(a.Location()).Minute()
+}
+
+func withinSameMinute(a, b time.Time) bool {
+	if !sameLocalMinute(a, b) {
+		return false
+	}
+	delta := a.Unix() - b.Unix()
+	if delta < 0 {
+		delta = -delta
+	}
+	return delta < 60
+}
+
+func isAgentTimer(s *watson.Service, timerID string) bool {
+	for _, session := range s.AgentSessions {
+		if session.TimerID == timerID && session.Running() {
+			return true
+		}
+	}
+	return false
+}
+
+func isAgentTimerRef(s *watson.Service, timerRef string) bool {
+	for _, timer := range s.RunningTimers() {
+		if timer.ID == timerRef || strings.HasPrefix(timer.ID, timerRef) {
+			return isAgentTimer(s, timer.ID)
+		}
+	}
+	return false
+}
+
+func floorAllStops(s *watson.Service) *time.Time {
+	stop := floorMinute(s.Now())
+	return &stop
+}
+
+func stopAllTimers(s *watson.Service, at *time.Time, minuteMode bool) ([]store.Frame, error) {
+	if minuteMode {
+		return s.StopAllMinute(at)
+	}
+	return s.StopAll(at)
+}
+
+func alignStopMinuteBoundary(s *watson.Service, timerRef string, requested *time.Time, enabled bool) *time.Time {
+	if requested == nil || !enabled {
+		return requested
+	}
+	var selected *store.ActiveTimer
+	matches := 0
+	for _, timer := range s.RunningTimers() {
+		if timer.ID == timerRef || strings.HasPrefix(timer.ID, timerRef) {
+			copyTimer := timer
+			selected = &copyTimer
+			matches++
+		}
+	}
+	if matches != 1 || selected == nil || isAgentTimer(s, selected.ID) || requested.Unix() >= selected.Start {
+		return requested
+	}
+	started := time.Unix(selected.Start, 0).In(requested.Location())
+	if !withinSameMinute(*requested, started) {
+		return requested
+	}
+	return &started
+}
+
+func invalidTime(value string) error {
+	return fmt.Errorf("Invalid time '%s'. Use a time such as '9:30 AM' or '14:30', optionally with a date such as '2026-10-26 2:30 PM'.", value)
+}
+
+func parseTwelveHour(value string) (time.Time, error) {
+	normalized := strings.ToUpper(strings.TrimSpace(value))
+	clock := strings.TrimSpace(strings.TrimSuffix(strings.TrimSuffix(normalized, "AM"), "PM"))
+	hourText, _, _ := strings.Cut(clock, ":")
+	hour, hourErr := strconv.Atoi(hourText)
+	if hourErr != nil || hour < 1 || hour > 12 {
+		return time.Time{}, fmt.Errorf("invalid 12-hour clock")
+	}
+	for _, layout := range []string{"3 PM", "3:04 PM", "3:04:05 PM"} {
+		if parsed, err := time.Parse(layout, normalized); err == nil {
+			return parsed, nil
+		}
+	}
+	return time.Time{}, fmt.Errorf("invalid 12-hour clock")
+}
+
+func parseClock(value string) (time.Time, int, int, int, bool) {
+	for _, layout := range []string{"15:04:05", "15:04"} {
+		if parsed, err := time.ParseInLocation(layout, value, time.UTC); err == nil {
+			return parsed, parsed.Hour(), parsed.Minute(), parsed.Second(), true
+		}
+	}
+	if parsed, err := parseTwelveHour(value); err == nil {
+		return parsed, parsed.Hour(), parsed.Minute(), parsed.Second(), true
+	}
+	return time.Time{}, 0, 0, 0, false
+}
+
+func parseDateOnly(value string) (time.Time, bool) {
+	for _, layout := range []string{"2006-1-2", "2006/1/2", "2006.1.2", "20060102", "2006-002", "2006-01", "2006"} {
+		if parsed, err := time.Parse(layout, value); err == nil {
+			return parsed, true
+		}
+	}
+	return time.Time{}, false
 }
 
 // dateutil assigns the post-transition offset to nonexistent local times,
@@ -677,6 +848,9 @@ func (a *app) start() *cobra.Command {
 				return e
 			}
 			when = &parsed
+		} else if minutePrecisionEnabled(s, a.name != "watson") {
+			parsed := floorMinute(s.Now())
+			when = &parsed
 		}
 		reader := bufio.NewReader(cmd.InOrStdin())
 		if s.Config.Bool("options", "confirm_new_project", false) || confirmProject {
@@ -738,12 +912,26 @@ func (a *app) start() *cobra.Command {
 					return err
 				}
 			} else {
-				stopped, stopErr := s.StopAll(when)
+				minuteMode := at == "" && minutePrecisionEnabled(s, true)
+				stopAt := when
+				if minuteMode {
+					stopAt = floorAllStops(s)
+				}
+				stopped, stopErr := stopAllTimers(s, stopAt, minuteMode)
 				if stopErr != nil {
 					return stopErr
 				}
 				if stopSet && stopRunning && !jsonOutput {
 					fmt.Fprintf(cmd.OutOrStdout(), "Stopped %d running %s.\n", len(stopped), plural(len(stopped), "timer", "timers"))
+				}
+			}
+		}
+		if a.name != "watson" && !concurrent && gap && when != nil && (hasMinutePrecision(at) || at == "" && minutePrecisionEnabled(s, true)) && len(s.Frames) > 0 {
+			previous := s.Frames[len(s.Frames)-1]
+			if previous.Stop != nil {
+				previousStop := time.Unix(*previous.Stop, 0).In(when.Location())
+				if when.Unix() < *previous.Stop && withinSameMinute(*when, previousStop) {
+					when = &previousStop
 				}
 			}
 		}
@@ -762,7 +950,7 @@ func (a *app) start() *cobra.Command {
 		fmt.Fprintf(cmd.OutOrStdout(), "Starting project %s%s at %s\n", styleText("project", state.Project), formatTags(state.Tags), styleText("time", displayStart.Format("15:04")))
 		return nil
 	}}
-	cmd.Flags().StringVar(&at, "at", "", "start frame at this time")
+	cmd.Flags().StringVar(&at, "at", "", "start frame at a local time (for example '9am'; omit the date for today)")
 	cmd.Flags().BoolFuncP("gap", "g", "leave a gap after the previous frame", func(value string) error {
 		enabled, err := strconv.ParseBool(value)
 		if err == nil {
@@ -820,6 +1008,9 @@ func (a *app) stop() *cobra.Command {
 			return err
 		}
 		if a.name != "watson" {
+			// Stopping should remain available even if the optional config file
+			// cannot be read; in that case, retain the default second precision.
+			_ = s.LoadConfig()
 			if _, err := s.RecoverExpiredAgentSessions(); err != nil {
 				return err
 			}
@@ -832,11 +1023,15 @@ func (a *app) stop() *cobra.Command {
 			}
 			when = &parsed
 		}
+		minutePrecision := minutePrecisionEnabled(s, a.name != "watson")
 		if all && timerRef != "" {
 			return errors.New("--all and --timer are mutually exclusive")
 		}
 		if all {
-			frames, stopErr := s.StopAll(when)
+			if at == "" && minutePrecision {
+				when = floorAllStops(s)
+			}
+			frames, stopErr := stopAllTimers(s, when, at == "" && minutePrecision)
 			if stopErr != nil {
 				return stopErr
 			}
@@ -846,6 +1041,11 @@ func (a *app) stop() *cobra.Command {
 			return nil
 		}
 		if timerRef != "" {
+			if at == "" && minutePrecision && !isAgentTimerRef(s, timerRef) {
+				parsed := floorMinute(s.Now())
+				when = &parsed
+			}
+			when = alignStopMinuteBoundary(s, timerRef, when, a.name != "watson" && (at == "" && minutePrecision || hasMinutePrecision(at)))
 			frame, stopErr := s.StopTimer(timerRef, when)
 			if stopErr != nil {
 				return stopErr
@@ -858,6 +1058,11 @@ func (a *app) stop() *cobra.Command {
 			return errors.New("No project started.")
 		}
 		if len(timers) == 1 || a.name == "watson" {
+			if at == "" && minutePrecision && !isAgentTimer(s, timers[0].ID) {
+				parsed := floorMinute(s.Now())
+				when = &parsed
+			}
+			when = alignStopMinuteBoundary(s, timers[0].ID, when, a.name != "watson" && (at == "" && minutePrecision || hasMinutePrecision(at)))
 			frame, stopErr := s.StopTimer(timers[0].ID, when)
 			if stopErr != nil {
 				return stopErr
@@ -875,7 +1080,10 @@ func (a *app) stop() *cobra.Command {
 			return pickErr
 		}
 		if selection == stopAllSelection {
-			frames, stopErr := s.StopAll(when)
+			if at == "" && minutePrecision {
+				when = floorAllStops(s)
+			}
+			frames, stopErr := stopAllTimers(s, when, at == "" && minutePrecision)
 			if stopErr != nil {
 				return stopErr
 			}
@@ -884,6 +1092,11 @@ func (a *app) stop() *cobra.Command {
 			}
 			return nil
 		}
+		if at == "" && minutePrecision && !isAgentTimer(s, selection) {
+			parsed := floorMinute(s.Now())
+			when = &parsed
+		}
+		when = alignStopMinuteBoundary(s, selection, when, a.name != "watson" && (at == "" && minutePrecision || hasMinutePrecision(at)))
 		frame, stopErr := s.StopTimer(selection, when)
 		if stopErr != nil {
 			return stopErr
@@ -891,7 +1104,7 @@ func (a *app) stop() *cobra.Command {
 		printStoppedFrame(cmd, frame, s.Now())
 		return nil
 	}}
-	cmd.Flags().StringVar(&at, "at", "", "stop frame at this time")
+	cmd.Flags().StringVar(&at, "at", "", "stop frame at a local time (for example '2:30 PM'; omit the date for today)")
 	if a.name != "watson" {
 		cmd.Flags().BoolVarP(&all, "all", "a", false, "stop all running timers")
 		cmd.Flags().StringVarP(&timerRef, "timer", "t", "", "stop a running timer by ID")
@@ -997,6 +1210,9 @@ func (a *app) restart() *cobra.Command {
 		if e != nil {
 			return e
 		}
+		if a.name != "watson" {
+			_ = s.LoadConfig()
+		}
 		ref := "-1"
 		if len(args) > 0 {
 			ref = args[0]
@@ -1007,6 +1223,9 @@ func (a *app) restart() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			when = &parsed
+		} else if minutePrecisionEnabled(s, a.name != "watson") {
+			parsed := floorMinute(s.Now())
 			when = &parsed
 		}
 		timers := s.RunningTimers()
@@ -1027,8 +1246,15 @@ func (a *app) restart() *cobra.Command {
 					if _, e = s.Stop(nil); e != nil {
 						return e
 					}
-				} else if _, e = s.StopAll(nil); e != nil {
-					return e
+				} else {
+					minuteMode := minutePrecisionEnabled(s, true)
+					var stopAt *time.Time
+					if minuteMode {
+						stopAt = floorAllStops(s)
+					}
+					if _, e = stopAllTimers(s, stopAt, minuteMode); e != nil {
+						return e
+					}
 				}
 			} else {
 				return fmt.Errorf("Project already started: %s%s", timers[0].Project, formatTags(timers[0].Tags))
@@ -1049,7 +1275,7 @@ func (a *app) restart() *cobra.Command {
 		fmt.Fprintf(cmd.OutOrStdout(), "Starting project %s%s at %s\n", styleText("project", state.Project), formatTags(state.Tags), styleText("time", displayStart.Format("15:04")))
 		return nil
 	}}
-	cmd.Flags().StringVar(&at, "at", "", "start frame at this time")
+	cmd.Flags().StringVar(&at, "at", "", "start frame at a local time (for example '9am'; omit the date for today)")
 	cmd.Flags().BoolFuncP("gap", "g", "leave a gap", func(value string) error {
 		enabled, err := strconv.ParseBool(value)
 		if err == nil {
@@ -1120,8 +1346,8 @@ func (a *app) add() *cobra.Command {
 		fmt.Fprintf(cmd.OutOrStdout(), "Adding project %s%s, started %s and stopped %s. (id: %s)\n", styleText("project", frame.Project), formatTags(frame.Tags), styleText("time", humanize(f, s.Now())), styleText("time", humanize(t2, s.Now())), styleText("id", shortID(frame.ID)))
 		return nil
 	}}
-	cmd.Flags().StringVarP(&from, "from", "f", "", "date and time activity started")
-	cmd.Flags().StringVarP(&to, "to", "t", "", "date and time activity ended")
+	cmd.Flags().StringVarP(&from, "from", "f", "", "date and time activity started (time-only values mean today)")
+	cmd.Flags().StringVarP(&to, "to", "t", "", "date and time activity ended (time-only values mean today)")
 	_ = cmd.MarkFlagRequired("from")
 	_ = cmd.MarkFlagRequired("to")
 	cmd.Flags().BoolVarP(&confirmProject, "confirm-new-project", "c", false, "confirm addition of new project")

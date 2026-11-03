@@ -35,5 +35,6 @@ snapshot:
 
 demos: build
 	vhs docs/vhs/cli.tape
+	vhs docs/vhs/flexible-datetime.tape
 	vhs docs/vhs/agent-session.tape
 	vhs docs/vhs/tui.tape
