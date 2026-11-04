@@ -62,6 +62,29 @@ func TestExecuteNoninteractiveCommandsAndUsage(t *testing.T) {
 	}
 }
 
+func TestStartWithoutProjectDoesNotPromptInScripts(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		args []string
+	}{
+		{name: "bare", args: []string{"start"}},
+		{name: "JSON", args: []string{"start", "--json"}},
+		{name: "time", args: []string{"start", "--at", "09:00"}},
+		{name: "tags only", args: []string{"start", "+ticket"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			out, err := runBurrowTimeCommand(dir, tc.args...)
+			if err == nil || err.Error() != "No project given." || out != "" {
+				t.Fatalf("output=%q err=%v", out, err)
+			}
+			if _, err := os.Stat(filepath.Join(dir, "state")); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("missing project wrote timer state: %v", err)
+			}
+		})
+	}
+}
+
 func TestStartConfirmationAndStopMinuteModes(t *testing.T) {
 	dir := t.TempDir()
 	if out, err := runBurrowTimeCommandInput(

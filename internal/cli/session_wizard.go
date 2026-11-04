@@ -2,12 +2,15 @@ package cli
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"sort"
 	"strings"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/fabean/BurrowTime/internal/store"
 	"github.com/fabean/BurrowTime/internal/watson"
 	"github.com/spf13/cobra"
@@ -237,6 +240,12 @@ func (m sessionWizardModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			case "down":
 				m.moveSuggestion(1)
 				return m, nil
+			case "pgup":
+				m.pageSuggestion(-1)
+				return m, nil
+			case "pgdown":
+				m.pageSuggestion(1)
+				return m, nil
 			case "ctrl+n":
 				if m.step == wizardProject {
 					m.acceptProject(strings.TrimSpace(string(m.input)))
@@ -271,6 +280,15 @@ func (m *sessionWizardModel) moveSuggestion(delta int) {
 		count = len(m.filteredTags())
 		m.tagCursor = wrapIndex(m.tagCursor+delta, count)
 	}
+}
+
+func (m *sessionWizardModel) pageSuggestion(direction int) {
+	delta := direction * m.suggestionRows()
+	if m.step == wizardProject {
+		m.projectCursor = max(0, min(len(m.filteredProjects())-1, m.projectCursor+delta))
+		return
+	}
+	m.tagCursor = max(0, min(len(m.filteredTags())-1, m.tagCursor+delta))
 }
 
 func (m *sessionWizardModel) editInput(msg tea.KeyMsg) {
@@ -523,9 +541,20 @@ func (m sessionWizardModel) result() sessionWizardResult {
 }
 
 func (m sessionWizardModel) View() string {
-	width := max(54, min(88, m.width-4))
-	if m.width < 1 {
-		width = 72
+	width := m.panelWidth()
+	isSuggestion := m.step == wizardProject || m.step == wizardTags
+	tooShort := m.height > 0 && m.height <= m.suggestionOverhead()
+	tooNarrow := m.width > 0 && m.width < 40
+	if isSuggestion && (tooShort || tooNarrow) {
+		availableWidth := m.width
+		if availableWidth < 1 {
+			availableWidth = width
+		}
+		message := truncate("Enlarge the terminal to browse.", availableWidth)
+		if m.height == 1 {
+			return message
+		}
+		return message + "\n" + truncate("Ctrl+C cancels.", availableWidth)
 	}
 	var title string
 	if m.kind == startWizard {
@@ -560,57 +589,115 @@ func (m sessionWizardModel) View() string {
 	return tuiBrandStyle.Render("◷  BURROWTIME") + "\n\n" + tuiPanel(title, body, width) + "\n" + help
 }
 
+func (m sessionWizardModel) panelWidth() int {
+	if m.width < 1 {
+		return 72
+	}
+	return max(20, min(88, m.width-4))
+}
+
+func (m sessionWizardModel) suggestionHelp() string {
+	var help string
+	if m.step == wizardProject {
+		help = tuiHelp("type", "search/new", "↑/↓", "browse", "PgUp/PgDn", "page", "enter", "select", "ctrl+n", "new", "ctrl+c", "cancel")
+	} else {
+		help = tuiHelp("type", "search/new tags", "↑/↓", "browse", "PgUp/PgDn", "page") + "\n"
+		if len(m.input) == 0 {
+			help += tuiHelp("tab/enter", "select/next", "ctrl+n", "continue", "ctrl+u", "clear", "esc", "back")
+		} else {
+			help += tuiHelp("tab", "select match", "enter", "add typed", "ctrl+n", "continue", "ctrl+u", "clear", "esc", "back")
+		}
+	}
+	return lipgloss.NewStyle().Width(m.panelWidth()).Render(help)
+}
+
+func (m sessionWizardModel) suggestionOverhead() int {
+	// Brand, panel borders/title, field label, input, spacing, and range counter.
+	rows := 9 + lipgloss.Height(m.suggestionHelp())
+	if m.step == wizardTags && len(m.tags) > 0 {
+		rows += 2
+	}
+	if m.errorText != "" {
+		rows += 2
+	}
+	return rows
+}
+
+func (m sessionWizardModel) suggestionRows() int {
+	height := m.height
+	if height < 1 {
+		height = 24
+	}
+	return max(1, min(12, height-m.suggestionOverhead()))
+}
+
+func (m sessionWizardModel) suggestionPage(count, cursor int) (int, int) {
+	rows := m.suggestionRows()
+	start := max(0, min(cursor, count-1)) / rows * rows
+	return start, min(count, start+rows)
+}
+
+func suggestionRange(start, end, count int, noun string) string {
+	if count == 0 {
+		return tuiMutedStyle.Render("0 " + noun)
+	}
+	return tuiMutedStyle.Render(fmt.Sprintf("%d–%d of %d %s", start+1, end, count, noun))
+}
+
 func (m sessionWizardModel) projectView(width int) (string, string) {
 	query := strings.TrimSpace(string(m.input))
 	projects := m.filteredProjects()
-	rows := max(3, min(8, m.height-17))
-	start := max(0, m.projectCursor-rows+1)
+	start, end := m.suggestionPage(len(projects), m.projectCursor)
 	var lines []string
-	for i := start; i < min(len(projects), start+rows); i++ {
+	for i := start; i < end; i++ {
 		marker, style := "  ", tuiTitleStyle
 		if i == m.projectCursor {
 			marker, style = tuiBrandStyle.Render("› "), tuiTitleStyle.Foreground(tuiPrimary).Background(tuiSurface).Bold(true)
 		}
-		lines = append(lines, style.Width(width-8).Render(marker+truncate(projects[i], width-10)))
+		lines = append(lines, style.Width(width-8).Render(marker+ansi.Truncate(projects[i], width-10, "…")))
 	}
 	if len(projects) == 0 {
-		lines = append(lines, tuiMutedStyle.Render("No matching projects. Enter the new name and press Enter."))
+		lines = append(lines, tuiMutedStyle.Render(truncate("No matching projects. Enter a new name.", width-8)))
 	}
 	if query == "" {
 		query = "Type to search or enter a new project"
 	}
-	body := tuiBrandStyle.Render("Project") + "\n" + tuiTagStyle.Render(truncate(query, width-8)) + " ▏\n\n" + strings.Join(lines, "\n")
+	body := tuiBrandStyle.Render("Project") + "\n" + tuiTagStyle.Render(ansi.Truncate(query, width-8, "…")) + " ▏\n\n" + strings.Join(lines, "\n")
+	body += "\n" + suggestionRange(start, end, len(projects), "projects")
 	if m.errorText != "" {
-		body += "\n\n" + tuiTitleStyle.Foreground(tuiWarning).Bold(true).Render(m.errorText)
+		body += "\n\n" + tuiTitleStyle.Foreground(tuiWarning).Bold(true).Render(ansi.Truncate(m.errorText, width-8, "…"))
 	}
-	return body, tuiHelp("type", "search", "↑/↓", "choose", "enter", "select", "ctrl+n", "new project", "ctrl+c", "cancel")
+	return body, m.suggestionHelp()
 }
 
 func (m sessionWizardModel) tagsView(width int) (string, string) {
 	var lines []string
-	for i, tag := range m.filteredTags() {
+	tags := m.filteredTags()
+	start, end := m.suggestionPage(len(tags), m.tagCursor)
+	for i := start; i < end; i++ {
 		marker, style := "  ", tuiTitleStyle
 		if i == m.tagCursor {
 			marker, style = tuiBrandStyle.Render("› "), tuiTitleStyle.Foreground(tuiPrimary).Background(tuiSurface).Bold(true)
 		}
-		lines = append(lines, style.Width(width-8).Render(marker+truncate(tag, width-10)))
+		lines = append(lines, style.Width(width-8).Render(marker+ansi.Truncate(tags[i], width-10, "…")))
 	}
 	if len(lines) == 0 {
-		lines = append(lines, tuiMutedStyle.Render("No matching tags. Enter new tags or Ctrl+N to continue."))
+		lines = append(lines, tuiMutedStyle.Render(truncate("No matching tags. Enter new tags or Ctrl+N to continue.", width-8)))
 	}
 	entry := strings.TrimSpace(string(m.input))
 	if entry == "" {
-		entry = "Type tags, or press Enter to select a suggestion"
+		entry = "Type to search or add new tags"
 	}
-	body := tuiBrandStyle.Render("Tags for "+m.project) + "\n" + tuiTagStyle.Render(truncate(entry, width-8)) + " ▏\n"
+	body := tuiBrandStyle.Render(ansi.Truncate("Tags for "+m.project, width-8, "…")) + "\n" + tuiTagStyle.Render(ansi.Truncate(entry, width-8, "…")) + " ▏\n"
 	if len(m.tags) > 0 {
-		body += "\nSelected: " + tuiTagStyle.Render(strings.Join(m.tags, ", ")) + "\n"
+		body += "\nSelected: " + tuiTagStyle.Render(ansi.Truncate(strings.Join(m.tags, ", "), width-18, "…")) + "\n"
 	}
 	body += "\n" + strings.Join(lines, "\n")
+	body += "\n" + suggestionRange(start, end, len(tags), "tags")
 	if m.errorText != "" {
-		body += "\n\n" + tuiTitleStyle.Foreground(tuiWarning).Bold(true).Render(m.errorText)
+		body += "\n\n" + tuiTitleStyle.Foreground(tuiWarning).Bold(true).Render(ansi.Truncate(m.errorText, width-8, "…"))
 	}
-	return body, tuiHelp("type", "new tags", "↑/↓", "browse", "tab/enter", "select", "ctrl+n", "continue", "esc", "back")
+	return body, m.suggestionHelp()
 }
 
 func (m sessionWizardModel) timeView(label, current string, allowNow bool, width int) string {

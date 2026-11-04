@@ -1,11 +1,13 @@
 package cli
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/fabean/BurrowTime/internal/store"
 	"github.com/fabean/BurrowTime/internal/watson"
 )
@@ -49,6 +51,167 @@ func TestSessionWizardRecentProjectsAndTagSuggestions(t *testing.T) {
 	model, _ = wizardUpdate(model, tea.KeyMsg{Type: tea.KeyEnter})
 	if !model.confirmed || model.result().Start != nil {
 		t.Fatalf("confirmed start result: %#v", model.result())
+	}
+}
+
+func TestSessionWizardLongSuggestionListsFitTerminal(t *testing.T) {
+	for _, tc := range []struct {
+		name                 string
+		width, height        int
+		step                 sessionWizardStep
+		selected, validation bool
+		wideText             bool
+	}{
+		{name: "tags normal", width: 80, height: 24, step: wizardTags},
+		{name: "tags short", width: 80, height: 18, step: wizardTags},
+		{name: "tags narrow", width: 40, height: 24, step: wizardTags},
+		{name: "tags tall", width: 100, height: 50, step: wizardTags},
+		{name: "many selected", width: 80, height: 24, step: wizardTags, selected: true},
+		{name: "selected and error", width: 60, height: 24, step: wizardTags, selected: true, validation: true},
+		{name: "projects normal", width: 80, height: 24, step: wizardProject},
+		{name: "projects short", width: 60, height: 18, step: wizardProject},
+		{name: "wide tag names", width: 80, height: 24, step: wizardTags, selected: true, wideText: true},
+		{name: "wide project names", width: 80, height: 24, step: wizardProject, wideText: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			model := newSessionWizardModel(wizardTestService(t), startWizard, sessionWizardDefaults{})
+			model.step, model.project = tc.step, strings.Repeat("long project ", 15)
+			if tc.wideText {
+				model.project = strings.Repeat("界", 100)
+			}
+			for i := range 200 {
+				choice := fmt.Sprintf("choice-%03d", i)
+				if tc.wideText {
+					choice += strings.Repeat("界", 100)
+				}
+				model.projects = append(model.projects, choice)
+				model.projectTags = append(model.projectTags, choice)
+				if tc.selected {
+					model.tags = append(model.tags, fmt.Sprintf("selected-%03d界界", i))
+				}
+			}
+			if tc.validation {
+				model.errorText = strings.Repeat("validation message ", 10)
+			}
+			updated, _ := model.Update(tea.WindowSizeMsg{Width: tc.width, Height: tc.height})
+			model = updated.(sessionWizardModel)
+			view := model.View()
+			if lipgloss.Height(view) > tc.height || lipgloss.Width(view) > tc.width {
+				t.Fatalf("view is %dx%d, terminal is %dx%d:\n%s",
+					lipgloss.Width(view), lipgloss.Height(view), tc.width, tc.height, view)
+			}
+			if !strings.Contains(view, "choice-000") || strings.Contains(view, "choice-199") {
+				t.Fatalf("list was not paged:\n%s", view)
+			}
+			if strings.Count(view, "choice-") > 12 || !strings.Contains(view, "of 200") || !strings.Contains(view, "PgUp/PgDn") {
+				t.Fatalf("list size, count, or controls missing:\n%s", view)
+			}
+		})
+	}
+}
+
+func TestSessionWizardSuggestionPagingAndResize(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		step sessionWizardStep
+	}{
+		{name: "projects", step: wizardProject},
+		{name: "tags", step: wizardTags},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			model := newSessionWizardModel(wizardTestService(t), startWizard, sessionWizardDefaults{})
+			model.step = tc.step
+			for i := range 100 {
+				choice := fmt.Sprintf("choice-%03d", i)
+				model.projects = append(model.projects, choice)
+				model.projectTags = append(model.projectTags, choice)
+			}
+			model, _ = wizardUpdate(model, tea.KeyMsg{Type: tea.KeyPgDown})
+			view := model.View()
+			if strings.Contains(view, "choice-000") || !strings.Contains(view, "› choice-") {
+				t.Fatalf("Page Down did not expose another page with selection:\n%s", view)
+			}
+			model, _ = wizardUpdate(model, tea.KeyMsg{Type: tea.KeyPgUp})
+			if !strings.Contains(model.View(), "choice-000") {
+				t.Fatal("Page Up did not return to the first page")
+			}
+			for range 100 {
+				model, _ = wizardUpdate(model, tea.KeyMsg{Type: tea.KeyPgDown})
+			}
+			if model.projectCursor != 99 && model.tagCursor != 99 {
+				t.Fatal("Page Down did not stop at the last suggestion")
+			}
+			updated, _ := model.Update(tea.WindowSizeMsg{Width: 60, Height: 18})
+			model = updated.(sessionWizardModel)
+			view = model.View()
+			if !strings.Contains(view, "› choice-099") || lipgloss.Height(view) > 18 {
+				t.Fatalf("resize hid selection or overflowed:\n%s", view)
+			}
+			for range 100 {
+				model, _ = wizardUpdate(model, tea.KeyMsg{Type: tea.KeyPgUp})
+			}
+			model, _ = wizardUpdate(model, tea.KeyMsg{Type: tea.KeyUp})
+			if !strings.Contains(model.View(), "› choice-099") {
+				t.Fatal("arrow wrap did not scroll to last suggestion")
+			}
+			model, _ = wizardUpdate(model, tea.KeyMsg{Type: tea.KeyDown})
+			if !strings.Contains(model.View(), "› choice-000") {
+				t.Fatal("arrow wrap did not return to first suggestion")
+			}
+		})
+	}
+}
+
+func TestSessionWizardTagSearchFromLaterPage(t *testing.T) {
+	model := newSessionWizardModel(wizardTestService(t), startWizard, sessionWizardDefaults{Project: "project"})
+	model.step, model.input = wizardTags, nil
+	for i := range 200 {
+		model.projectTags = append(model.projectTags, fmt.Sprintf("ticket-%03d", i))
+	}
+	model, _ = wizardUpdate(model, tea.KeyMsg{Type: tea.KeyPgDown})
+	model, _ = wizardUpdate(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("TICKET-179")})
+	view := model.View()
+	if model.tagCursor != 0 || !strings.Contains(view, "ticket-179") || strings.Contains(view, "ticket-000") || !strings.Contains(view, "of 1 tags") {
+		t.Fatalf("filtered page=%s", view)
+	}
+	model, _ = wizardUpdate(model, tea.KeyMsg{Type: tea.KeyTab})
+	if len(model.tags) != 1 || model.tags[0] != "ticket-179" || model.step != wizardTags {
+		t.Fatalf("selected tags=%v step=%v", model.tags, model.step)
+	}
+	model, _ = wizardUpdate(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("missing")})
+	model, _ = wizardUpdate(model, tea.KeyMsg{Type: tea.KeyPgDown})
+	model, _ = wizardUpdate(model, tea.KeyMsg{Type: tea.KeyPgUp})
+	if !strings.Contains(model.View(), "No matching tags") || model.tagCursor != 0 {
+		t.Fatal("empty search did not remain usable")
+	}
+	model, _ = wizardUpdate(model, tea.KeyMsg{Type: tea.KeyCtrlU})
+	if !strings.Contains(model.View(), "ticket-000") {
+		t.Fatal("clearing search did not restore first page")
+	}
+	if strings.Contains(strings.Join(model.filteredTags(), ","), "ticket-179") {
+		t.Fatal("selected tag returned to suggestions")
+	}
+	model, _ = wizardUpdate(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("new tag, other tag")})
+	model, _ = wizardUpdate(model, tea.KeyMsg{Type: tea.KeyEnter})
+	if len(model.tags) != 3 || model.step != wizardStart {
+		t.Fatalf("new tags did not continue: tags=%v step=%v", model.tags, model.step)
+	}
+}
+
+func TestSessionWizardSmallTerminalRecoversOnResize(t *testing.T) {
+	model := newSessionWizardModel(wizardTestService(t), startWizard, sessionWizardDefaults{Project: "project"})
+	model.step, model.projectTags, model.input = wizardTags, []string{"ticket"}, nil
+	for _, size := range []tea.WindowSizeMsg{{Width: 30, Height: 24}, {Width: 80, Height: 5}, {Width: 80, Height: 1}} {
+		updated, _ := model.Update(size)
+		model = updated.(sessionWizardModel)
+		if view := model.View(); !strings.Contains(view, "Enlarge the terminal") || lipgloss.Height(view) > size.Height || lipgloss.Width(view) > size.Width {
+			t.Fatalf("small terminal view=%s", view)
+		}
+	}
+	updated, _ := model.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	model = updated.(sessionWizardModel)
+	if !strings.Contains(model.View(), "ticket") {
+		t.Fatal("resizing did not restore suggestions")
 	}
 }
 
@@ -443,7 +606,7 @@ func TestSessionWizardDisplaysSearchChoicesAndConfiguredMinutePrecision(t *testi
 		t.Fatal("unchanged default project not accepted")
 	}
 	model.input = nil
-	if !strings.Contains(model.View(), "Type tags") {
+	if !strings.Contains(model.View(), "Type to search or add new tags") {
 		t.Fatal("tag prompt missing")
 	}
 	model.step = wizardProject

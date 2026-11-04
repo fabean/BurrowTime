@@ -572,10 +572,12 @@ Session JSON and CSV logs include a message field/column when available.
 
 ### Interactive session wizards
 
-Use the optional start wizard to choose a recent project, search existing
-projects, select or enter tags, and confirm a new timer:
+Run `burrowtime start` without a project or start options in a terminal to
+choose a recent project, select or enter tags, and confirm a new timer. Use
+`--interactive` explicitly when you want to prefill the form:
 
 ```bash
+burrowtime start
 burrowtime start --interactive
 burrowtime start -i
 ```
@@ -594,7 +596,11 @@ burrowtime add -i
 Type to search projects, use the arrow keys to browse suggestions, and press
 Enter to select. Use Ctrl+N to create a new project. At the tag step, enter
 multiple tags separated by commas, or use the arrow keys and Enter to select a
-highlighted existing tag. Press Tab to add the highlighted suggestion without
+highlighted existing tag. Type to filter the suggestions; when text is entered,
+Tab selects a matching existing tag and Enter adds the typed tags. Long project
+and tag lists fit the terminal height and show a visible range and total count.
+Use Page Up / Page Down to browse a page at a time, and Ctrl+U to clear a search.
+Press Tab to add the highlighted suggestion without
 leaving the field, or Ctrl+N to finish the tag step. Enter advances when there
 are no suggestions left. Enter accepts the start wizard's current-time default.
 Both wizards include an optional session message. The add wizard requires
@@ -605,9 +611,12 @@ date/time formats as the ordinary CLI commands, including `9am`, `2:30 PM`,
 
 Review the summary before confirming. Esc returns to the previous field (or
 cancels from the project field), and Ctrl+C cancels from any step without
-starting or adding a session. Interactive mode requires a terminal and is
-never enabled by default. Existing positional project/tag arguments and
-`--at` / `--from` / `--to` values prefill their matching fields.
+starting or adding a session. Automatic wizard entry requires terminal input
+and output, and respects `BURROWTIME_TUI=0`. Global flags such as `--data-dir`
+are allowed; supplied projects or start options retain their normal behavior.
+Scripts and redirected commands still require a project. With explicit
+`--interactive`, positional project/tag arguments and `--at` / `--from` / `--to`
+values prefill their matching fields. `watson start` keeps its existing behavior.
 
 Run `burrowtime <command> --help` for every available flag.
 

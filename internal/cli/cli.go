@@ -843,6 +843,14 @@ func (a *app) start() *cobra.Command {
 		if concurrent && !gap {
 			return errors.New("--concurrent and --no-gap are mutually exclusive")
 		}
+		bareStart := a.name != "watson" && len(args) == 0
+		if bareStart && commandSupportsTUI(cmd) {
+			hasStartOptions := false
+			cmd.LocalNonPersistentFlags().VisitAll(func(flag *pflag.Flag) {
+				hasStartOptions = hasStartOptions || flag.Changed
+			})
+			interactive = interactive || !hasStartOptions
+		}
 		s, err := a.open()
 		if err != nil {
 			return err
@@ -996,6 +1004,11 @@ func (a *app) start() *cobra.Command {
 	cmd.Flags().StringVar(&at, "at", "", "start frame at a local time (for example '9am'; omit the date for today)")
 	cmd.Flags().StringVarP(&message, "message", "m", "", "session message")
 	if a.name != "watson" {
+		cmd.Long = "Start monitoring time for a project.\n\n" +
+			"Run 'burrowtime start' without a project or start options to open the guided wizard in a terminal.\n" +
+			"Global flags such as --data-dir are allowed. Set BURROWTIME_TUI=0 to disable automatic entry.\n" +
+			"Use --interactive to open the wizard explicitly, including with prefilled arguments.\n" +
+			"Scripts and redirected commands must provide a project."
 		cmd.Flags().BoolVarP(&interactive, "interactive", "i", false, "guide session setup with an interactive wizard")
 	}
 	cmd.Flags().BoolFuncP("gap", "g", "leave a gap after the previous frame", func(value string) error {
