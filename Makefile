@@ -42,3 +42,4 @@ demos: build
 	vhs docs/vhs/session-messages-tui.tape
 	vhs docs/vhs/session-wizard.tape
 	vhs docs/vhs/tui.tape
+	vhs docs/vhs/session-edit-tui.tape
