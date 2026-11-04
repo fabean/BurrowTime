@@ -25,6 +25,14 @@ type agentSessionsDocument struct {
 	Sessions []AgentSession `json:"sessions"`
 }
 
+// SessionMessages is BurrowTime-only metadata. Keeping it outside Watson's
+// positional frame/state files preserves interoperability.
+type SessionMessages struct {
+	Version int               `json:"version"`
+	Frames  map[string]string `json:"frames"`
+	Timers  map[string]string `json:"timers"`
+}
+
 func WatsonDir() (string, error) {
 	if dir := os.Getenv("WATSON_DIR"); dir != "" {
 		return dir, nil
@@ -153,6 +161,33 @@ func (r *Repository) LoadAgentSessions() ([]AgentSession, error) {
 		}
 	}
 	return document.Sessions, nil
+}
+
+func (r *Repository) LoadSessionMessages() (SessionMessages, error) {
+	doc := SessionMessages{Version: 1, Frames: map[string]string{}, Timers: map[string]string{}}
+	if err := readJSON(r.path("session_messages"), &doc); err != nil {
+		return doc, err
+	}
+	if doc.Version != 0 && doc.Version != 1 {
+		return doc, fmt.Errorf("unsupported session_messages version %d", doc.Version)
+	}
+	if doc.Frames == nil {
+		doc.Frames = map[string]string{}
+	}
+	if doc.Timers == nil {
+		doc.Timers = map[string]string{}
+	}
+	return doc, nil
+}
+func (r *Repository) SaveSessionMessages(doc SessionMessages) error {
+	doc.Version = 1
+	if doc.Frames == nil {
+		doc.Frames = map[string]string{}
+	}
+	if doc.Timers == nil {
+		doc.Timers = map[string]string{}
+	}
+	return r.saveJSON("session_messages", doc)
 }
 
 func (r *Repository) LoadLastSync() (int64, error) {

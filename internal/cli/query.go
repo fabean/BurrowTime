@@ -30,6 +30,7 @@ type queryFlags struct {
 	day, week, month, year, luna, all          bool
 	projects, tags, ignoreProjects, ignoreTags []string
 	json, csv, pager, noPager                  bool
+	showMessages                               bool
 }
 
 func (q *queryFlags) bind(cmd *cobra.Command, shortcuts, ignores bool) {
@@ -285,7 +286,7 @@ func (a *app) aggregate() *cobra.Command {
 		if e != nil {
 			return e
 		}
-		summaries := aggregateDaily(s.Frames, s.RunningTimers(), s.Now(), o)
+		summaries, dailyFrames := aggregateDailyWithFrames(s.Frames, s.RunningTimers(), s.Now(), o)
 		if q.json {
 			return encodeJSON(cmd.OutOrStdout(), summaries)
 		}
@@ -293,10 +294,15 @@ func (a *app) aggregate() *cobra.Command {
 			return writeAggregateCSV(cmd.OutOrStdout(), summaries)
 		}
 		var output bytes.Buffer
-		writeAggregatePlain(&output, summaries)
+		if q.showMessages {
+			writeAggregatePlainMessages(&output, summaries, dailyFrames)
+		} else {
+			writeAggregatePlain(&output, summaries)
+		}
 		return emitPaged(cmd, output.Bytes(), q.usePager(s))
 	}}
 	q.bind(cmd, false, false)
+	cmd.Flags().BoolVar(&q.showMessages, "show-messages", false, "show session messages beneath project and tag totals")
 	a.bindQueryCompletions(cmd)
 	return cmd
 }
@@ -304,15 +310,22 @@ func (a *app) aggregate() *cobra.Command {
 // aggregateDaily applies the CLI aggregate command's day-by-day clipping and
 // reporting rules. The TUI calls the same helper to keep totals consistent.
 func aggregateDaily(frames []store.Frame, timers []store.ActiveTimer, now time.Time, options btReport.Options) []btReport.Summary {
+	summaries, _ := aggregateDailyWithFrames(frames, timers, now, options)
+	return summaries
+}
+
+func aggregateDailyWithFrames(frames []store.Frame, timers []store.ActiveTimer, now time.Time, options btReport.Options) ([]btReport.Summary, [][]store.Frame) {
 	summaries := []btReport.Summary{}
+	dailyFrames := [][]store.Frame{}
 	for day := options.From; !day.After(options.To); day = day.AddDate(0, 0, 1) {
 		dayFrom, dayTo := btReport.DayBounds(day, day)
 		daily := options
 		daily.From, daily.To = dayFrom, dayTo
 		filtered := btReport.FilterActive(frames, timers, now, daily)
+		dailyFrames = append(dailyFrames, filtered)
 		summaries = append(summaries, btReport.Build(filtered, daily))
 	}
-	return summaries
+	return summaries, dailyFrames
 }
 
 type logJSONFrame struct {
@@ -321,12 +334,13 @@ type logJSONFrame struct {
 	Start   string   `json:"start"`
 	Stop    string   `json:"stop"`
 	Tags    []string `json:"tags"`
+	Message string   `json:"message,omitempty"`
 }
 
 func writeLogJSON(w io.Writer, frames []store.Frame, loc *time.Location) error {
 	out := make([]logJSONFrame, 0, len(frames))
 	for _, f := range frames {
-		out = append(out, logJSONFrame{ID: f.ID, Project: f.Project, Start: isoTime(time.Unix(f.Start, int64(f.StartMicros)*1000).In(loc)), Stop: isoTime(time.Unix(*f.Stop, int64(f.StopMicros)*1000).In(loc)), Tags: f.Tags})
+		out = append(out, logJSONFrame{ID: f.ID, Project: f.Project, Start: isoTime(time.Unix(f.Start, int64(f.StartMicros)*1000).In(loc)), Stop: isoTime(time.Unix(*f.Stop, int64(f.StopMicros)*1000).In(loc)), Tags: f.Tags, Message: f.Message})
 	}
 	return encodeJSON(w, out)
 }
@@ -336,11 +350,11 @@ func writeLogCSV(w io.Writer, frames []store.Frame, loc *time.Location) error {
 		return err
 	}
 	cw := csv.NewWriter(w)
-	if e := cw.Write([]string{"id", "start", "stop", "project", "tags"}); e != nil {
+	if e := cw.Write([]string{"id", "start", "stop", "project", "tags", "message"}); e != nil {
 		return e
 	}
 	for _, f := range frames {
-		if e := cw.Write([]string{shortID(f.ID), time.Unix(f.Start, 0).In(loc).Format("2006-01-02 15:04:05"), time.Unix(*f.Stop, 0).In(loc).Format("2006-01-02 15:04:05"), f.Project, strings.Join(f.Tags, ", ")}); e != nil {
+		if e := cw.Write([]string{shortID(f.ID), time.Unix(f.Start, 0).In(loc).Format("2006-01-02 15:04:05"), time.Unix(*f.Stop, 0).In(loc).Format("2006-01-02 15:04:05"), f.Project, strings.Join(f.Tags, ", "), f.Message}); e != nil {
 			return e
 		}
 	}
@@ -482,6 +496,38 @@ func writeAggregatePlain(w io.Writer, summaries []btReport.Summary) {
 				fmt.Fprintf(w, "\t[%s %s]\n", styleText("tag", fmt.Sprintf("%-*s", longest, tag.Name)), styleText("time", fmt.Sprintf("%11s", formatDuration(int64(tag.Time)))))
 			}
 			if projectIndex < len(s.Projects)-1 {
+				fmt.Fprintln(w)
+			}
+		}
+	}
+	if len(summaries) > 0 {
+		fmt.Fprintln(w)
+	}
+}
+
+func writeAggregatePlainMessages(w io.Writer, summaries []btReport.Summary, dailyFrames [][]store.Frame) {
+	for i, summary := range summaries {
+		if i > 0 {
+			fmt.Fprint(w, "\n\n")
+		}
+		fmt.Fprintf(w, "%s - %s\n", styleText("date", summary.Timespan.From.Format("Mon 02 January 2006")), styleText("time", formatDuration(int64(summary.Time))))
+		var frames []store.Frame
+		if i < len(dailyFrames) {
+			frames = dailyFrames[i]
+		}
+		for pi, project := range summary.Projects {
+			fmt.Fprintf(w, "  %s - %s\n", styleText("project", project.Name), styleText("time", formatDuration(int64(project.Time))))
+			for _, tag := range project.Tags {
+				fmt.Fprintf(w, "\t[%s %s]\n", styleText("tag", fmt.Sprintf("%-*s", 2, tag.Name)), styleText("time", fmt.Sprintf("%11s", formatDuration(int64(tag.Time)))))
+				seen := map[string]bool{}
+				for _, frame := range frames {
+					if frame.Project == project.Name && containsString(frame.Tags, tag.Name) && frame.Message != "" && !seen[frame.Message] {
+						fmt.Fprintf(w, "\t  ↳ %s\n", frame.Message)
+						seen[frame.Message] = true
+					}
+				}
+			}
+			if pi < len(summary.Projects)-1 {
 				fmt.Fprintln(w)
 			}
 		}

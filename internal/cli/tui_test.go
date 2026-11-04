@@ -153,6 +153,24 @@ func TestAggregateViewRendersTitleRangeAndFooterControls(t *testing.T) {
 	}
 }
 
+func TestMessageVisibilityDefaultsAndTogglesIndependently(t *testing.T) {
+	model := dashboardModel{screen: tuiLog, logMessagesVisible: true}
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'m'}})
+	model = updated.(dashboardModel)
+	if model.logMessagesVisible {
+		t.Fatal("log messages should be hidden after toggle")
+	}
+	model.openScreen(tuiReport)
+	if model.reportMessagesVisible {
+		t.Fatal("report messages should default to hidden")
+	}
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'m'}})
+	model = updated.(dashboardModel)
+	if !model.reportMessagesVisible || model.logMessagesVisible {
+		t.Fatal("visibility settings should remain independent")
+	}
+}
+
 func TestDashboardFilterMatchesProjectsTagsAndIDs(t *testing.T) {
 	model := tuiTestModel()
 	model.rangeIndex = 4

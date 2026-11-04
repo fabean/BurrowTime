@@ -24,6 +24,7 @@ type Service struct {
 	State         store.State
 	Concurrent    []store.ActiveTimer
 	AgentSessions []store.AgentSession
+	Messages      store.SessionMessages
 }
 
 const PrimaryTimerID = "primary"
@@ -69,7 +70,55 @@ func OpenData(dir string) (*Service, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Service{Repo: repo, Config: config.New(), Frames: frames, State: state, Concurrent: concurrent, AgentSessions: agentSessions, Now: now}, nil
+	messages, err := repo.LoadSessionMessages()
+	if err != nil {
+		return nil, err
+	}
+	for i := range frames {
+		frames[i].Message = messages.Frames[frames[i].ID]
+	}
+	for i := range concurrent {
+		concurrent[i].Message = messages.Timers[concurrent[i].ID]
+	}
+	return &Service{Repo: repo, Config: config.New(), Frames: frames, State: state, Concurrent: concurrent, AgentSessions: agentSessions, Messages: messages, Now: now}, nil
+}
+
+func (s *Service) SetFrameMessage(ref, message string) (store.Frame, error) {
+	f, i, err := s.Lookup(ref)
+	if err != nil {
+		return store.Frame{}, err
+	}
+	f.Message = message
+	if strings.TrimSpace(message) == "" {
+		delete(s.Messages.Frames, f.ID)
+	} else {
+		s.Messages.Frames[f.ID] = message
+	}
+	if err := s.Repo.SaveSessionMessages(s.Messages); err != nil {
+		return store.Frame{}, err
+	}
+	s.Frames[i].Message = message
+	return s.Frames[i], nil
+}
+
+func (s *Service) SetTimerMessage(ref, message string) error {
+	timer, index, err := s.resolveTimer(ref)
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(message) == "" {
+		delete(s.Messages.Timers, timer.ID)
+	} else {
+		s.Messages.Timers[timer.ID] = message
+	}
+	if err := s.Repo.SaveSessionMessages(s.Messages); err != nil {
+		return err
+	}
+	if index < 0 {
+		return nil
+	}
+	s.Concurrent[index].Message = message
+	return nil
 }
 
 func (s *Service) LoadConfig() error {
@@ -99,7 +148,7 @@ func unique(items []string) []string {
 func (s *Service) RunningTimers() []store.ActiveTimer {
 	out := make([]store.ActiveTimer, 0, len(s.Concurrent)+1)
 	if s.State.Running() {
-		out = append(out, store.ActiveTimer{ID: PrimaryTimerID, Project: s.State.Project, Start: s.State.Start, Tags: append([]string(nil), s.State.Tags...), Primary: true})
+		out = append(out, store.ActiveTimer{ID: PrimaryTimerID, Project: s.State.Project, Start: s.State.Start, Tags: append([]string(nil), s.State.Tags...), Message: s.Messages.Timers[PrimaryTimerID], Primary: true})
 	}
 	for _, timer := range s.Concurrent {
 		copyTimer := timer
@@ -220,9 +269,19 @@ func (s *Service) stopTimer(ref string, at *time.Time, sessionID string, status 
 	if err != nil {
 		return store.Frame{}, err
 	}
+	if message := s.Messages.Timers[timer.ID]; message != "" {
+		frame.Message = message
+		s.Messages.Frames[frame.ID] = message
+		delete(s.Messages.Timers, timer.ID)
+	}
 	frames := append(append([]store.Frame(nil), s.Frames...), frame)
 	if err := s.Repo.SaveFrames(frames); err != nil {
 		return store.Frame{}, err
+	}
+	if frame.Message != "" {
+		if err := s.Repo.SaveSessionMessages(s.Messages); err != nil {
+			return store.Frame{}, err
+		}
 	}
 	concurrent := append([]store.ActiveTimer(nil), s.Concurrent...)
 	state := s.State
@@ -304,10 +363,18 @@ func (s *Service) stopAll(at *time.Time, minuteMode bool) ([]store.Frame, error)
 		if err != nil {
 			return nil, err
 		}
+		if message := s.Messages.Timers[timer.ID]; message != "" {
+			frame.Message = message
+			s.Messages.Frames[frame.ID] = message
+			delete(s.Messages.Timers, timer.ID)
+		}
 		stopped = append(stopped, frame)
 	}
 	frames := append(append([]store.Frame(nil), s.Frames...), stopped...)
 	if err := s.Repo.SaveFrames(frames); err != nil {
+		return nil, err
+	}
+	if err := s.Repo.SaveSessionMessages(s.Messages); err != nil {
 		return nil, err
 	}
 	if err := s.Repo.SaveState(store.State{}); err != nil {
@@ -398,6 +465,12 @@ func (s *Service) Add(project string, tags []string, from, to time.Time) (store.
 	if err := s.Repo.SaveFrames(s.Frames); err != nil {
 		return store.Frame{}, err
 	}
+	if f.Message != "" {
+		s.Messages.Frames[f.ID] = f.Message
+		if err := s.Repo.SaveSessionMessages(s.Messages); err != nil {
+			return store.Frame{}, err
+		}
+	}
 	return f, nil
 }
 
@@ -455,6 +528,10 @@ func (s *Service) Remove(ref string) (store.Frame, error) {
 	}
 	s.Frames = append(s.Frames[:i], s.Frames[i+1:]...)
 	if err := s.Repo.SaveFrames(s.Frames); err != nil {
+		return store.Frame{}, err
+	}
+	delete(s.Messages.Frames, f.ID)
+	if err := s.Repo.SaveSessionMessages(s.Messages); err != nil {
 		return store.Frame{}, err
 	}
 	return f, nil

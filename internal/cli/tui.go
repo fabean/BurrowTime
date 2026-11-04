@@ -58,22 +58,25 @@ const (
 type tuiTick time.Time
 
 type dashboardModel struct {
-	service       *watson.Service
-	loadErr       error
-	screen        tuiScreen
-	inputMode     tuiInputMode
-	input         []rune
-	command       menuItem
-	choice        []string
-	filter        string
-	rangeIndex    int
-	cursor        int
-	commandCursor int
-	scroll        int
-	width         int
-	height        int
-	now           time.Time
-	cursorVisible bool
+	service                  *watson.Service
+	loadErr                  error
+	screen                   tuiScreen
+	inputMode                tuiInputMode
+	input                    []rune
+	command                  menuItem
+	choice                   []string
+	filter                   string
+	rangeIndex               int
+	cursor                   int
+	commandCursor            int
+	scroll                   int
+	width                    int
+	height                   int
+	now                      time.Time
+	cursorVisible            bool
+	logMessagesVisible       bool
+	reportMessagesVisible    bool
+	aggregateMessagesVisible bool
 }
 
 var (
@@ -118,14 +121,15 @@ func newDashboardModel(dir string) dashboardModel {
 		now = s.Now()
 	}
 	return dashboardModel{
-		service:       s,
-		loadErr:       err,
-		screen:        tuiHome,
-		rangeIndex:    1,
-		width:         90,
-		height:        28,
-		now:           now,
-		cursorVisible: true,
+		service:            s,
+		loadErr:            err,
+		screen:             tuiHome,
+		rangeIndex:         1,
+		width:              90,
+		height:             28,
+		now:                now,
+		cursorVisible:      true,
+		logMessagesVisible: true,
 	}
 }
 
@@ -235,6 +239,20 @@ func (m dashboardModel) updateScreen(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m.activateMenuItem(menuItems[m.commandCursor])
 		}
 	case tuiLog, tuiReport, tuiAggregate:
+		if key == "m" {
+			switch m.screen {
+			case tuiLog:
+				m.logMessagesVisible = !m.logMessagesVisible
+				m.scroll = 0
+			case tuiReport:
+				m.reportMessagesVisible = !m.reportMessagesVisible
+				m.scroll = 0
+			case tuiAggregate:
+				m.aggregateMessagesVisible = !m.aggregateMessagesVisible
+				m.clampScroll()
+			}
+			return m, nil
+		}
 		if key == "a" {
 			m.openScreen(tuiAggregate)
 			return m, nil
@@ -471,6 +489,7 @@ func (m dashboardModel) logView() string {
 	toolbar := m.queryToolbar("LOG", len(m.tuiFrames(false)), "sessions")
 	content, position := m.viewport(lines)
 	footer := m.queryFooter()
+	footer += tuiMutedStyle.Render("  m messages " + visibilityLabel(m.logMessagesVisible))
 	return m.header("Log") + "\n\n" + toolbar + "\n\n" + content + "\n" + padBetween(footer, position, m.contentWidth())
 }
 
@@ -527,6 +546,9 @@ func (m dashboardModel) logLines() []string {
 				if tags != "" {
 					lines = append(lines, "                "+tuiMutedStyle.Render(truncate(tags, max(1, width-16))))
 				}
+				if m.logMessagesVisible && frame.Message != "" {
+					lines = append(lines, "                  "+tuiMutedStyle.Render("↳ "+frame.Message))
+				}
 				continue
 			}
 			projectWidth := min(22, max(12, width/5))
@@ -543,6 +565,9 @@ func (m dashboardModel) logLines() []string {
 				line += "  " + tuiMutedStyle.Render(truncate(tags, tagsWidth))
 			}
 			lines = append(lines, line)
+			if m.logMessagesVisible && frame.Message != "" {
+				lines = append(lines, "      "+tuiMutedStyle.Render("↳ "+frame.Message))
+			}
 		}
 	}
 	return lines
@@ -556,6 +581,7 @@ func (m dashboardModel) reportView() string {
 	toolbar := m.queryToolbar("REPORT", len(summary.Projects), "projects")
 	content, position := m.viewport(lines)
 	footer := m.queryFooter()
+	footer += tuiMutedStyle.Render("  m messages " + visibilityLabel(m.reportMessagesVisible))
 	return m.header("Report") + "\n\n" + toolbar + "\n\n" + content + "\n" + padBetween(footer, position, m.contentWidth())
 }
 
@@ -593,14 +619,26 @@ func (m dashboardModel) reportLines(summary btReport.Summary) []string {
 			}
 			lines = append(lines, "    "+tuiMutedStyle.Render(truncate(strings.Join(parts, "   "), max(1, width-4))))
 		}
+		if m.reportMessagesVisible {
+			for _, tag := range project.Tags {
+				seen := map[string]bool{}
+				for _, frame := range m.tuiFrames(true) {
+					if frame.Project != project.Name || frame.Message == "" || !containsString(frame.Tags, tag.Name) || seen[frame.Message] {
+						continue
+					}
+					lines = append(lines, "      "+tuiMutedStyle.Render("↳ "+frame.Message))
+					seen[frame.Message] = true
+				}
+			}
+		}
 		lines = append(lines, "")
 	}
 	return lines
 }
 
 func (m dashboardModel) aggregateView() string {
-	summaries := m.aggregateSummaries()
-	lines := m.aggregateSummaryLines(summaries)
+	summaries, dailyFrames := m.aggregateSummariesWithFrames()
+	lines := m.aggregateSummaryLinesWithFrames(summaries, dailyFrames)
 	days := 0
 	for _, summary := range summaries {
 		if len(summary.Projects) > 0 {
@@ -610,26 +648,37 @@ func (m dashboardModel) aggregateView() string {
 	toolbar := m.queryToolbar("AGGREGATE", days, "days")
 	content, position := m.viewport(lines)
 	footer := m.queryFooter()
+	footer += tuiMutedStyle.Render("  m messages " + visibilityLabel(m.aggregateMessagesVisible))
 	return m.header("Aggregate") + "\n\n" + toolbar + "\n\n" + content + "\n" + padBetween(footer, position, m.contentWidth())
 }
 
 func (m dashboardModel) aggregateLines() []string {
-	return m.aggregateSummaryLines(m.aggregateSummaries())
+	summaries, dailyFrames := m.aggregateSummariesWithFrames()
+	return m.aggregateSummaryLinesWithFrames(summaries, dailyFrames)
 }
 
 func (m dashboardModel) aggregateSummaries() []btReport.Summary {
+	summaries, _ := m.aggregateSummariesWithFrames()
+	return summaries
+}
+
+func (m dashboardModel) aggregateSummariesWithFrames() ([]btReport.Summary, [][]store.Frame) {
 	options, err := m.tuiOptions(true)
 	if err != nil {
-		return nil
+		return nil, nil
 	}
 	frames := m.tuiFrames(true)
-	return aggregateDaily(frames, nil, m.now, options)
+	return aggregateDailyWithFrames(frames, nil, m.now, options)
 }
 
 func (m dashboardModel) aggregateSummaryLines(summaries []btReport.Summary) []string {
+	return m.aggregateSummaryLinesWithFrames(summaries, nil)
+}
+
+func (m dashboardModel) aggregateSummaryLinesWithFrames(summaries []btReport.Summary, dailyFrames [][]store.Frame) []string {
 	width := m.contentWidth()
 	lines := []string{}
-	for _, summary := range summaries {
+	for dayIndex, summary := range summaries {
 		if len(summary.Projects) == 0 {
 			continue
 		}
@@ -641,6 +690,10 @@ func (m dashboardModel) aggregateSummaryLines(summaries []btReport.Summary) []st
 		dayLabel := truncate(day.Format("Monday, January 2, 2006"), max(8, width-lipgloss.Width(dayDuration)-2))
 		dayTitle := tuiBrandStyle.Render(dayLabel)
 		lines = append(lines, padBetween(dayTitle, tuiTimeStyle.Bold(true).Render(dayDuration), width))
+		var frames []store.Frame
+		if dayIndex < len(dailyFrames) {
+			frames = dailyFrames[dayIndex]
+		}
 		for projectIndex, project := range summary.Projects {
 			nameWidth := min(32, max(10, width-20))
 			projectLine := "  " + tuiTitleStyle.Foreground(tuiAccent).Render(fmt.Sprintf("%-*s", nameWidth, truncate(project.Name, nameWidth)))
@@ -649,6 +702,17 @@ func (m dashboardModel) aggregateSummaryLines(summaries []btReport.Summary) []st
 				tagWidth := min(40, max(10, width-20))
 				tagLine := "    " + tuiTagStyle.Render("#"+truncate(tag.Name, tagWidth))
 				lines = append(lines, padBetween(tagLine, tuiMutedStyle.Render(formatDuration(int64(tag.Time))), width))
+				if m.aggregateMessagesVisible {
+					seen := map[string]bool{}
+					for _, frame := range frames {
+						if frame.Project != project.Name || frame.Message == "" || !containsString(frame.Tags, tag.Name) || seen[frame.Message] {
+							continue
+						}
+						message := "      " + tuiMutedStyle.Render(truncate("↳ "+frame.Message, max(1, width-6)))
+						lines = append(lines, message)
+						seen[frame.Message] = true
+					}
+				}
 			}
 			if projectIndex < len(summary.Projects)-1 {
 				lines = append(lines, "")
@@ -659,6 +723,21 @@ func (m dashboardModel) aggregateSummaryLines(summaries []btReport.Summary) []st
 		return []string{"", tuiMutedStyle.Render("  No tracked time matches this range and filter.")}
 	}
 	return lines
+}
+
+func visibilityLabel(visible bool) string {
+	if visible {
+		return "on"
+	}
+	return "off"
+}
+func containsString(values []string, value string) bool {
+	for _, item := range values {
+		if item == value {
+			return true
+		}
+	}
+	return false
 }
 
 func (m dashboardModel) queryToolbar(kind string, count int, noun string) string {

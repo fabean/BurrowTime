@@ -377,6 +377,7 @@ MCP version, skill targets, session states, and individual features.
 | `←` / `→` | Change the report range |
 | `/` | Filter by project, tag, frame ID, or date |
 | `tab` | Cycle between Log, Report, and Aggregate |
+| `m` | Toggle session messages in the current Log, Report, or Aggregate view |
 | `b` / `esc` | Go back |
 | `q` | Quit |
 
@@ -497,12 +498,45 @@ For overnight sessions, provide explicit dates on both endpoints so the end
 date is unambiguous. BurrowTime does not silently advance an end time to the
 next day.
 
+Add a message to describe work performed on a session. Messages stay separate
+from tags, so ticket-based reports continue to group time as before:
+
+```bash
+burrowtime start RAF +RAF-326 -m "Investigating migration issue"
+burrowtime stop -m "Fixed migration mapping and updated tests"
+burrowtime add --from "2026-10-27 10:00" --to "2026-10-27 11:00" RAF +RAF-326 -m "Completed QA testing"
+burrowtime edit -1 -m "Updated description"
+burrowtime log --all --json
+burrowtime aggregate --week --show-messages
+```
+
+Messages are optional and remain separate from tags, so adding different work
+descriptions to sessions with the same ticket does not change project or ticket
+totals. Use `burrowtime edit -1 -m ""` to clear a message. In the TUI, Log
+messages are visible by default; Report and Aggregate messages are hidden by
+default. Press `m` to toggle visibility independently in each view. The CLI
+aggregate output hides messages by default; `--show-messages` displays them
+under their project and tag without changing totals.
+
+<p align="center">
+  <img src="assets/burrowtime-session-messages.gif" alt="BurrowTime starting a timer with a message, replacing it when stopping, and showing the saved message in aggregate output" width="900">
+</p>
+
+The TUI shows messages beneath their sessions in Log. In Report, press `m` to
+show messages beneath the matching project and ticket:
+
+<p align="center">
+  <img src="assets/burrowtime-session-messages-tui.gif" alt="BurrowTime TUI showing session messages in Log by default and toggling grouped messages on in Report" width="900">
+</p>
+
 Use JSON or CSV when another program will consume the result:
 
 ```bash
 burrowtime log --all --json | jq '.[0]'
 burrowtime report --month --csv > august.csv
 ```
+
+Session JSON and CSV logs include a message field/column when available.
 
 Run `burrowtime <command> --help` for every available flag.
 
@@ -537,6 +571,8 @@ kept outside that core format:
 
 - concurrent timers live in the additive `active_timers` file;
 - agent ownership and leases live in the additive `agent_sessions` file;
+- session messages live in the additive `session_messages` companion file,
+  keyed by frame or timer ID;
 - the first running timer remains in the compatible `state` file;
 - completed concurrent timers become ordinary Watson frames;
 - the Bubble Tea UI calls the same command and reporting implementation as the

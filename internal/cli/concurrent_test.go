@@ -51,6 +51,77 @@ func TestConcurrentStartJSONReturnsExactTimerID(t *testing.T) {
 	}
 }
 
+func TestStartOutputIncludesOptionalMessageAfterProjectAndTags(t *testing.T) {
+	dir := t.TempDir()
+	output, err := runBurrowTimeCommand(dir, "start", "RAF", "+RAF-326", "-m", "Investigating the migration issue")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(output, "Starting project RAF [RAF-326]") || !strings.Contains(output, " — Investigating the migration issue\n") {
+		t.Fatalf("start output=%q", output)
+	}
+
+	concurrentOutput, err := runBurrowTimeCommand(dir, "start", "--concurrent", "OIG", "+DOS-52", "--message", "Checking the related ticket")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(concurrentOutput, "Starting concurrent project OIG [DOS-52]") || !strings.Contains(concurrentOutput, " — Checking the related ticket\n") {
+		t.Fatalf("concurrent start output=%q", concurrentOutput)
+	}
+}
+
+func TestSessionMessagesPersistAcrossStartStopAndAppearInLogExports(t *testing.T) {
+	dir := t.TempDir()
+	if _, err := runBurrowTimeCommand(dir, "start", "RAF", "+RAF-326", "-m", "Investigating issue"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runBurrowTimeCommand(dir, "stop", "-m", "Fixed mapping, updated tests"); err != nil {
+		t.Fatal(err)
+	}
+	s, err := watson.OpenData(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(s.Frames) != 1 || s.Frames[0].Message != "Fixed mapping, updated tests" || len(s.Frames[0].Tags) != 1 {
+		t.Fatalf("frame=%#v", s.Frames)
+	}
+	output, err := runBurrowTimeCommand(dir, "log", "--all", "--json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var rows []logJSONFrame
+	if err := json.Unmarshal([]byte(output), &rows); err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || rows[0].Message != "Fixed mapping, updated tests" {
+		t.Fatalf("export=%#v", rows)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "session_messages"))
+	if err != nil || !bytes.Contains(data, []byte("Fixed mapping")) {
+		t.Fatalf("metadata=%s err=%v", data, err)
+	}
+	if _, err := runBurrowTimeCommand(dir, "edit", rows[0].ID, "-m", "replacement"); err != nil {
+		t.Fatal(err)
+	}
+	s, err = watson.OpenData(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.Frames[0].Message != "replacement" {
+		t.Fatalf("replacement=%q", s.Frames[0].Message)
+	}
+	if _, err := runBurrowTimeCommand(dir, "edit", rows[0].ID, "--message="); err != nil {
+		t.Fatal(err)
+	}
+	s, err = watson.OpenData(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.Frames[0].Message != "" {
+		t.Fatalf("expected cleared message, got %q", s.Frames[0].Message)
+	}
+}
+
 func TestConcurrentCLIRequiresExplicitStopSelection(t *testing.T) {
 	dir := t.TempDir()
 	if output, err := runBurrowTimeCommand(dir, "start", "one", "+first"); err != nil {

@@ -16,6 +16,7 @@ type Frame struct {
 	ID               string
 	IDNull           bool
 	Tags             []string
+	Message          string `json:"-"`
 	UpdatedAt        int64
 	UpdatedAtMissing bool
 	// Subsecond fields are transient projections used by Watson-compatible
@@ -102,6 +103,7 @@ type ActiveTimer struct {
 	Project string   `json:"project"`
 	Start   int64    `json:"start"`
 	Tags    []string `json:"tags"`
+	Message string   `json:"-"`
 	Primary bool     `json:"-"`
 }
 
