@@ -52,6 +52,27 @@ func TestSessionWizardRecentProjectsAndTagSuggestions(t *testing.T) {
 	}
 }
 
+func TestSessionWizardEnterSelectsHighlightedExistingTag(t *testing.T) {
+	s := wizardTestService(t)
+	now := s.Now()
+	stop := now.Add(-time.Hour).Unix()
+	s.Frames = []store.Frame{{Start: now.Add(-2 * time.Hour).Unix(), Stop: &stop, Project: "alpha", Tags: []string{"A-1", "A-2"}}}
+	model := newSessionWizardModel(s, startWizard, sessionWizardDefaults{})
+	model, _ = wizardUpdate(model, tea.KeyMsg{Type: tea.KeyEnter})
+	if model.step != wizardTags {
+		t.Fatalf("project selection did not open tag suggestions: %#v", model)
+	}
+	model, _ = wizardUpdate(model, tea.KeyMsg{Type: tea.KeyDown})
+	model, _ = wizardUpdate(model, tea.KeyMsg{Type: tea.KeyEnter})
+	if model.step != wizardTags || strings.Join(model.tags, ",") != "A-2" {
+		t.Fatalf("Enter did not select the highlighted suggestion: %#v", model)
+	}
+	model, _ = wizardUpdate(model, tea.KeyMsg{Type: tea.KeyCtrlN})
+	if model.step != wizardStart {
+		t.Fatalf("Ctrl+N did not finish the optional tag step: %#v", model)
+	}
+}
+
 func TestSessionWizardCanCreateProjectAndCancelBeforeSaving(t *testing.T) {
 	s := wizardTestService(t)
 	model := newSessionWizardModel(s, startWizard, sessionWizardDefaults{})

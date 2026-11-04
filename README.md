@@ -396,11 +396,11 @@ dates. Untagged time remains included in project and daily totals.
 From Log, press `e` to select a completed session, use arrows or `j`/`k` to
 move, and press Enter to edit it. Press `/` to search by project, tag, date,
 or session ID. In the editor, use arrows or Tab to choose a field, press Enter
-to edit it, and use Ctrl+U to clear a field before typing. Press Ctrl+S from
-the form to review the save summary, then press Enter to confirm. You can also
-select **Save Changes** and press Enter. Esc cancels selection,
-the current field edit, or the editor without saving. The selection list skips
-active timers and completed agent-owned sessions; use the existing `edit ID`
+to edit it, and use Ctrl+U to clear a field before typing. Press `s` from the
+form or Ctrl+S while editing a field to review the save summary, then press
+Enter to confirm. Or select **Save Changes** and press Enter. Esc cancels
+selection, the current field edit, or the editor without saving. The selection
+list skips active timers and completed agent-owned sessions; use the existing `edit ID`
 command for an active primary timer.
 
 <p align="center">
@@ -592,8 +592,10 @@ burrowtime add -i
 
 Type to search projects, use the arrow keys to browse suggestions, and press
 Enter to select. Use Ctrl+N to create a new project. At the tag step, enter
-multiple tags separated by commas or press Tab to add a suggested tag; Enter
-without tags skips them. Enter accepts the start wizard's current-time default.
+multiple tags separated by commas, or use the arrow keys and Enter to select a
+highlighted existing tag. Press Tab to add the highlighted suggestion without
+leaving the field, or Ctrl+N to finish the tag step. Enter advances when there
+are no suggestions left. Enter accepts the start wizard's current-time default.
 Both wizards include an optional session message. The add wizard requires
 start and end times; a time-only end value uses the start date, while an
 explicit date can be entered for overnight work. Prompts use the same flexible

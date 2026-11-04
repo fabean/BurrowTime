@@ -169,9 +169,14 @@ func TestSessionEditCtrlSSavesFromAnySelectedField(t *testing.T) {
 	stopUnix := start.Add(time.Hour).Unix()
 	frame := store.Frame{Start: start.Unix(), Stop: &stopUnix, Project: "RAF", ID: "aaaaaaaaaaaaaaaa"}
 	model := newSessionEditModel(frame, frame.ID, start.Add(2*time.Hour))
-	if !strings.Contains(model.View(), "ctrl+s") {
-		t.Fatalf("form help does not advertise Ctrl+S: %s", model.View())
+	if !strings.Contains(model.View(), "s/Ctrl+s") {
+		t.Fatalf("form help does not advertise the save shortcuts: %s", model.View())
 	}
+	model, _ = sessionEditUpdate(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
+	if !model.confirm || model.confirmed {
+		t.Fatalf("s should open confirmation without skipping it: %#v", model)
+	}
+	model, _ = sessionEditUpdate(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
 	model, _ = sessionEditUpdate(model, tea.KeyMsg{Type: tea.KeyCtrlS})
 	if !model.confirm || model.confirmed {
 		t.Fatalf("Ctrl+S should open confirmation without skipping it: %#v", model)
@@ -179,6 +184,16 @@ func TestSessionEditCtrlSSavesFromAnySelectedField(t *testing.T) {
 	model, _ = sessionEditUpdate(model, tea.KeyMsg{Type: tea.KeyEnter})
 	if !model.confirmed {
 		t.Fatal("confirmation Enter did not approve save")
+	}
+
+	model = newSessionEditModel(frame, frame.ID, start.Add(2*time.Hour))
+	model.field = editProject
+	model, _ = sessionEditUpdate(model, tea.KeyMsg{Type: tea.KeyEnter})
+	model, _ = sessionEditUpdate(model, tea.KeyMsg{Type: tea.KeyCtrlU})
+	model, _ = sessionEditUpdate(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("Updated project")})
+	model, _ = sessionEditUpdate(model, tea.KeyMsg{Type: tea.KeyCtrlS})
+	if model.editing || !model.confirm || model.project != "Updated project" {
+		t.Fatalf("Ctrl+S while editing should apply the field and review save: %#v", model)
 	}
 }
 
