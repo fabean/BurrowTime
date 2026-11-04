@@ -41,42 +41,43 @@ type sessionWizardDefaults struct {
 }
 
 type sessionWizardResult struct {
-	Project string
-	Tags    []string
-	Start   *time.Time
-	End     *time.Time
-	Message string
+	Project              string
+	Tags                 []string
+	Start                *time.Time
+	End                  *time.Time
+	Message              string
+	StartMinutePrecision bool
 }
 
 type sessionWizardModel struct {
-	kind           sessionWizardKind
-	step           sessionWizardStep
-	frames         []store.Frame
-	timers         []store.ActiveTimer
-	projects       []string
-	projectTags    []string
-	defaultTags    []string
-	defaultTagList func(string) []string
-	project        string
-	tags           []string
-	startText      string
-	endText        string
-	messageText    string
-	input          []rune
-	initialInput   string
-	projectCursor  int
-	tagCursor      int
-	startTime      time.Time
-	endTime        time.Time
-	hasStart       bool
-	hasEnd         bool
-	now            time.Time
-	nowFunc        func() time.Time
-	width          int
-	height         int
-	errorText      string
-	confirmed      bool
-	canceled       bool
+	kind            sessionWizardKind
+	step            sessionWizardStep
+	frames          []store.Frame
+	timers          []store.ActiveTimer
+	projects        []string
+	projectTags     []string
+	defaultTags     []string
+	defaultTagList  func(string) []string
+	project         string
+	tags            []string
+	startText       string
+	endText         string
+	messageText     string
+	input           []rune
+	initialInput    string
+	projectCursor   int
+	tagCursor       int
+	startTime       time.Time
+	endTime         time.Time
+	hasStart        bool
+	hasEnd          bool
+	now             time.Time
+	nowFunc         func() time.Time
+	width           int
+	height          int
+	errorText       string
+	confirmed       bool
+	canceled        bool
 	minutePrecision bool
 }
 
@@ -135,20 +136,20 @@ func recentTagsForProject(frames []store.Frame, timers []store.ActiveTimer, proj
 
 func newSessionWizardModel(s *watson.Service, kind sessionWizardKind, defaults sessionWizardDefaults) sessionWizardModel {
 	model := sessionWizardModel{
-		kind:           kind,
-		frames:         append([]store.Frame(nil), s.Frames...),
-		timers:         append([]store.ActiveTimer(nil), s.RunningTimers()...),
-		projects:       recentProjects(s),
-		defaultTags:    append([]string(nil), s.Config.List("default_tags", defaults.Project)...),
-		defaultTagList: func(project string) []string { return s.Config.List("default_tags", project) },
-		project:        strings.TrimSpace(defaults.Project),
-		tags:           append([]string(nil), defaults.Tags...),
-		now:            s.Now(),
-		nowFunc:        s.Now,
+		kind:            kind,
+		frames:          append([]store.Frame(nil), s.Frames...),
+		timers:          append([]store.ActiveTimer(nil), s.RunningTimers()...),
+		projects:        recentProjects(s),
+		defaultTags:     append([]string(nil), s.Config.List("default_tags", defaults.Project)...),
+		defaultTagList:  func(project string) []string { return s.Config.List("default_tags", project) },
+		project:         strings.TrimSpace(defaults.Project),
+		tags:            append([]string(nil), defaults.Tags...),
+		now:             s.Now(),
+		nowFunc:         s.Now,
 		minutePrecision: minutePrecisionEnabled(s, true),
-		width:          80,
-		height:         24,
-		step:           wizardProject,
+		width:           80,
+		height:          24,
+		step:            wizardProject,
 	}
 	model.input = []rune(model.project)
 	model.initialInput = model.project
@@ -188,7 +189,7 @@ func (m sessionWizardModel) filteredTags() []string {
 	}
 	filtered := make([]string, 0, len(m.projectTags))
 	for _, tag := range m.projectTags {
-		if strings.Contains(strings.ToLower(tag), query) {
+		if !containsString(m.tags, tag) && strings.Contains(strings.ToLower(tag), query) {
 			filtered = append(filtered, tag)
 		}
 	}
@@ -242,6 +243,10 @@ func (m sessionWizardModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			case "ctrl+n":
 				if m.step == wizardProject {
 					m.acceptProject(strings.TrimSpace(string(m.input)))
+					return m, nil
+				}
+				if m.step == wizardTags {
+					m.continueAfterTags()
 					return m, nil
 				}
 			case "tab":
@@ -325,14 +330,14 @@ func (m *sessionWizardModel) acceptField() {
 		}
 		m.acceptProject(value)
 	case wizardTags:
+		if value == "" && len(m.filteredTags()) > 0 {
+			m.acceptSuggestedTag()
+			return
+		}
 		if value != "" {
 			m.tags = appendUnique(m.tags, splitWizardTags(value)...)
 		}
-		m.step = wizardStart
-		m.now = m.currentTime()
-		m.input = []rune(m.startText)
-		m.initialInput = m.startText
-		m.errorText = ""
+		m.continueAfterTags()
 	case wizardStart:
 		if value == "" && m.kind == startWizard {
 			m.startTime = m.currentTime()
@@ -396,6 +401,14 @@ func (m *sessionWizardModel) acceptField() {
 	}
 }
 
+func (m *sessionWizardModel) continueAfterTags() {
+	m.step = wizardStart
+	m.now = m.currentTime()
+	m.input = []rune(m.startText)
+	m.initialInput = m.startText
+	m.errorText = ""
+}
+
 func (m *sessionWizardModel) acceptProject(project string) {
 	project = strings.TrimSpace(project)
 	if project == "" {
@@ -420,6 +433,7 @@ func (m *sessionWizardModel) acceptSuggestedTag() {
 	m.tags = appendUnique(m.tags, tags[index])
 	m.input = nil
 	m.initialInput = ""
+	m.tagCursor = 0
 	m.errorText = ""
 }
 
@@ -494,7 +508,12 @@ func (m sessionWizardModel) effectiveTags() []string {
 }
 
 func (m sessionWizardModel) result() sessionWizardResult {
-	result := sessionWizardResult{Project: m.project, Tags: append([]string(nil), m.tags...), Message: m.messageText}
+	result := sessionWizardResult{
+		Project:              m.project,
+		Tags:                 append([]string(nil), m.tags...),
+		Message:              m.messageText,
+		StartMinutePrecision: hasMinutePrecision(m.startText),
+	}
 	if m.hasStart && !(m.kind == startWizard && m.startText == "") {
 		start := m.startTime
 		result.Start = &start
@@ -583,11 +602,11 @@ func (m sessionWizardModel) tagsView(width int) (string, string) {
 		lines = append(lines, style.Width(width-8).Render(marker+truncate(tag, width-10)))
 	}
 	if len(lines) == 0 {
-		lines = append(lines, tuiMutedStyle.Render("No matching tags. Enter new tags separated by commas."))
+		lines = append(lines, tuiMutedStyle.Render("No matching tags. Enter new tags or Ctrl+N to continue."))
 	}
 	entry := strings.TrimSpace(string(m.input))
 	if entry == "" {
-		entry = "Type tags separated by commas, or press Enter to skip"
+		entry = "Type tags, or press Enter to select a suggestion"
 	}
 	body := tuiBrandStyle.Render("Tags for "+m.project) + "\n" + tuiTagStyle.Render(truncate(entry, width-8)) + " ▏\n"
 	if len(m.tags) > 0 {
@@ -597,7 +616,7 @@ func (m sessionWizardModel) tagsView(width int) (string, string) {
 	if m.errorText != "" {
 		body += "\n\n" + tuiTitleStyle.Foreground(tuiWarning).Bold(true).Render(m.errorText)
 	}
-	return body, tuiHelp("type", "new tags", "↑/↓", "browse", "tab", "add suggestion", "enter", "continue/skip", "esc", "back")
+	return body, tuiHelp("type", "new tags", "↑/↓", "browse", "tab/enter", "select", "ctrl+n", "continue", "esc", "back")
 }
 
 func (m sessionWizardModel) timeView(label, current string, allowNow bool, width int) string {

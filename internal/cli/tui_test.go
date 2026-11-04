@@ -212,7 +212,7 @@ func TestLogEditSelectionNavigatesOpensCancelsAndSavesInPlace(t *testing.T) {
 	model = updated.(dashboardModel)
 	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	model = updated.(dashboardModel)
-	for i := 0; i < 4; i++ {
+	for i := 0; i < 5; i++ {
 		updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyDown})
 		model = updated.(dashboardModel)
 	}

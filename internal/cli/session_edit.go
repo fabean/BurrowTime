@@ -271,6 +271,16 @@ func (m sessionEditModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		}
+		if msg.String() == "ctrl+s" {
+			if m.editing {
+				m.updateValue(tea.KeyMsg{Type: tea.KeyEnter})
+				if m.editing {
+					return m, nil
+				}
+			}
+			m.beginConfirmation()
+			return m, nil
+		}
 		if m.editing {
 			m.updateValue(msg)
 			return m, nil
@@ -283,7 +293,7 @@ func (m sessionEditModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			m.field = sessionEditField(wrapIndex(int(m.field)-1, 6))
 		case "down", "j", "tab":
 			m.field = sessionEditField(wrapIndex(int(m.field)+1, 6))
-		case "ctrl+s":
+		case "s":
 			m.beginConfirmation()
 		case "enter":
 			if m.field == editSave {
@@ -479,9 +489,9 @@ func (m sessionEditModel) View() string {
 	if m.errorText != "" {
 		lines = append(lines, "", tuiTitleStyle.Foreground(tuiWarning).Bold(true).Render(m.errorText))
 	}
-	help := tuiHelp("↑/↓", "field", "enter", "edit/select", "ctrl+s", "save", "esc", "cancel")
+	help := tuiHelp("↑/↓", "field", "enter", "edit/select", "s/Ctrl+s", "review save", "esc", "cancel")
 	if m.editing {
-		help = tuiHelp("type", "edit value", "ctrl+u", "clear", "enter", "apply", "esc", "keep current")
+		help = tuiHelp("type", "edit value", "ctrl+u", "clear", "enter", "apply", "ctrl+s", "review save", "esc", "keep current")
 	}
 	if m.confirm {
 		help = tuiHelp("enter/y", "confirm", "n/esc", "review", "ctrl+c", "cancel")
