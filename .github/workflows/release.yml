@@ -26,8 +26,8 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      - name: Test
-        run: go test ./...
+      - name: Test and enforce 90% coverage
+        run: make coverage
 
       - name: Release
         uses: goreleaser/goreleaser-action@v7

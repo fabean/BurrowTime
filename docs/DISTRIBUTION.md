@@ -140,7 +140,7 @@ Reference: [GoReleaser Scoop publisher](https://goreleaser.com/customization/pub
 
 ## Release checklist
 
-- Run `go test ./...`, `go test -race ./...`, and `go vet ./...`.
+- Run `make coverage`, `go test -race ./...`, and `go vet ./...`.
 - Run and inspect a GoReleaser snapshot.
 - Verify the version prints correctly from both release binaries.
 - Review generated release notes.

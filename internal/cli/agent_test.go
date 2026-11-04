@@ -54,6 +54,119 @@ func TestAgentReportRejectsUnknownStatus(t *testing.T) {
 	}
 }
 
+func TestAgentCLICompleteLifecycle(t *testing.T) {
+	dir := t.TempDir()
+	startArgs := []string{
+		"agent", "start", "--client", "codex", "--project", "project", "--task", "T-1",
+		"--idempotency-key", "task-1", "--lease", "5m", "--repository", "repo", "--branch", "main", "-m", "initial",
+	}
+	out, err := runBurrowTimeCommand(dir, append(startArgs, "--json")...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var started agentSessionResult
+	if err := json.Unmarshal([]byte(out), &started); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := runBurrowTimeCommand(dir, startArgs...); err != nil || !strings.Contains(out, "Reused agent session") {
+		t.Fatalf("out=%q err=%v", out, err)
+	}
+	for _, command := range []string{"heartbeat", "pause", "resume"} {
+		out, err := runBurrowTimeCommand(dir, "agent", command, "--session", started.Session.ID)
+		if err != nil || !strings.Contains(out, "Agent session") {
+			t.Fatalf("%s: out=%q err=%v", command, out, err)
+		}
+	}
+	for _, args := range [][]string{
+		{"agent", "status"},
+		{"agent", "status", "--active", "--json"},
+		{"agent", "status", "--session", started.Session.ID, "--json"},
+		{"agent", "report"},
+		{"agent", "report", "--client", "missing"},
+		{"agent", "report", "--project", "missing", "--json"},
+		{"agent", "report", "--status", "paused", "--json"},
+		{"agent", "recover"},
+		{"agent", "recover", "--json"},
+	} {
+		if out, err := runBurrowTimeCommand(dir, args...); err != nil || out == "" {
+			t.Fatalf("%v: out=%q err=%v", args, out, err)
+		}
+	}
+	if out, err := runBurrowTimeCommand(dir, "agent", "stop", "--session", started.Session.ID, "-m", "done"); err != nil || !strings.Contains(out, "stopped") {
+		t.Fatalf("out=%q err=%v", out, err)
+	}
+	if _, err := runBurrowTimeCommand(dir, "start", "human", "-m", "human message"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runBurrowTimeCommand(dir, "agent", "stop", "--session", started.Session.ID, "-m", "should not overwrite"); err != nil {
+		t.Fatal(err)
+	}
+	s, err := watson.OpenData(dir)
+	if err != nil || s.Messages.Timers[watson.PrimaryTimerID] != "human message" {
+		t.Fatalf("service=%+v err=%v", s, err)
+	}
+}
+
+func TestAgentStopMessageRejectsAmbiguousSessionWithoutMutation(t *testing.T) {
+	dir := t.TempDir()
+	s, err := watson.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, task := range []string{"T-1", "T-2"} {
+		if _, _, err := s.StartAgentSession(watson.AgentStartOptions{Client: "codex", Project: "project", Task: task}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s.AgentSessions[0].ID = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1"
+	s.AgentSessions[1].ID = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa2"
+	if err := s.Repo.SaveAgentSessions(s.AgentSessions); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runBurrowTimeCommand(dir, "agent", "stop", "--session", "aaaa", "-m", "wrong"); err == nil {
+		t.Fatal("accepted ambiguous session")
+	}
+	loaded, err := watson.OpenData(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded.Messages.Timers) != 0 || len(loaded.RunningTimers()) != 2 {
+		t.Fatalf("mutated ambiguous sessions: %+v", loaded)
+	}
+}
+
+func TestAgentCommandValidationAndReadErrors(t *testing.T) {
+	for _, args := range [][]string{
+		{"agent", "start", "--lease", "bad"},
+		{"agent", "status", "--session", "missing"},
+		{"agent", "heartbeat", "--session", "missing"},
+		{"agent", "pause", "--session", "missing"},
+		{"agent", "resume", "--session", "missing"},
+		{"agent", "stop", "--session", "missing", "-m", "message"},
+	} {
+		t.Run(strings.Join(args, " "), func(t *testing.T) {
+			if _, err := runBurrowTimeCommand(t.TempDir(), args...); err == nil {
+				t.Fatal("accepted invalid command")
+			}
+		})
+	}
+	for _, command := range []string{"start", "status", "report", "recover", "stop"} {
+		t.Run(command+" corrupt state", func(t *testing.T) {
+			dir := t.TempDir()
+			if err := os.WriteFile(filepath.Join(dir, "frames"), []byte("bad"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			args := []string{"agent", command}
+			if command == "stop" {
+				args = append(args, "--session", "missing")
+			}
+			if _, err := runBurrowTimeCommand(dir, args...); err == nil {
+				t.Fatal("accepted corrupt storage")
+			}
+		})
+	}
+}
+
 func TestAgentReportGroupsStandardFramesBySession(t *testing.T) {
 	dir := t.TempDir()
 	s, err := watson.Open(dir)

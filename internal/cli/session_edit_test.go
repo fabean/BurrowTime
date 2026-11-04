@@ -8,6 +8,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/fabean/BurrowTime/internal/store"
 	"github.com/fabean/BurrowTime/internal/watson"
+	"github.com/spf13/cobra"
 )
 
 func TestSessionPickerFiltersAndNavigatesRecentSessions(t *testing.T) {
@@ -216,4 +217,192 @@ func editTestService(t *testing.T) *watson.Service {
 	now := time.Date(2026, time.October, 28, 16, 0, 0, 0, time.Local)
 	s.Now = func() time.Time { return now }
 	return s
+}
+
+func TestSessionPickerViewsPreselectionAndEmptySearch(t *testing.T) {
+	s := editTestService(t)
+	stop := s.Now().Add(-time.Hour).Unix()
+	s.Frames = []store.Frame{
+		{Start: stop - 3600, Stop: &stop, Project: "alpha", ID: "aaaaaaaaaaaaaaaa", Tags: []string{"ticket"}},
+		{Start: stop - 1800, Stop: &stop, Project: "legacy"},
+	}
+	model := newSessionPickerModel(s, "aaaa")
+	if model.filtered[model.cursor].frame.Project != "alpha" {
+		t.Fatal("ID prefix was not preselected")
+	}
+	if model.Init() != nil {
+		t.Fatal("session picker unexpectedly schedules work")
+	}
+	if view := model.View(); !strings.Contains(view, "alpha") || !strings.Contains(view, "#2") || !strings.Contains(view, "ticket") {
+		t.Fatalf("picker missing session details: %s", view)
+	}
+	updated, _ := model.Update(tea.WindowSizeMsg{Width: 60, Height: 16})
+	model = updated.(sessionPickerModel)
+	if model.width != 60 || model.height != 16 {
+		t.Fatal("picker ignored resize")
+	}
+	model, _ = sessionPickerUpdate(model, tea.KeyMsg{Type: tea.KeyUp})
+	model, _ = sessionPickerUpdate(model, tea.KeyMsg{Type: tea.KeyDown})
+	model, _ = sessionPickerUpdate(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}})
+	if !strings.Contains(model.View(), "finish search") {
+		t.Fatal("search controls missing")
+	}
+	model, _ = sessionPickerUpdate(model, tea.KeyMsg{Type: tea.KeySpace})
+	model, _ = sessionPickerUpdate(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("missing")})
+	model, _ = sessionPickerUpdate(model, tea.KeyMsg{Type: tea.KeyBackspace})
+	model, _ = sessionPickerUpdate(model, tea.KeyMsg{Type: tea.KeyDelete})
+	if got := string(model.query); got != " missi" {
+		t.Fatalf("search editing=%q", got)
+	}
+	if len(model.filtered) != 0 || !strings.Contains(model.View(), "No completed editable sessions match") {
+		t.Fatal("empty search state missing")
+	}
+	model, _ = sessionPickerUpdate(model, tea.KeyMsg{Type: tea.KeyEnter})
+	model, command := sessionPickerUpdate(model, tea.KeyMsg{Type: tea.KeyEnter})
+	if command != nil || model.selected != "" {
+		t.Fatal("empty search selected a session")
+	}
+	model, command = sessionPickerUpdate(model, tea.KeyMsg{Type: tea.KeyEsc})
+	if !model.canceled || command == nil {
+		t.Fatal("escape did not cancel picker")
+	}
+}
+
+func TestSessionEditLocationUsesTZAndFallsBack(t *testing.T) {
+	now := time.Date(2026, time.October, 28, 12, 0, 0, 0, time.UTC)
+	t.Setenv("TZ", "America/New_York")
+	if got := sessionEditLocation(now).String(); got != "America/New_York" {
+		t.Fatalf("location=%s", got)
+	}
+	t.Setenv("TZ", "not/a/zone")
+	if got := sessionEditLocation(now); got != time.UTC {
+		t.Fatalf("invalid zone did not fall back: %v", got)
+	}
+}
+
+func TestSessionEditValidationAndInputCancellation(t *testing.T) {
+	now := time.Date(2026, time.October, 28, 12, 0, 0, 0, time.UTC)
+	stop := now.Add(-time.Hour).Unix()
+	frame := store.Frame{Start: stop - 3600, Stop: &stop, Project: "alpha", Tags: []string{"ticket"}}
+	base := newSessionEditModel(frame, "-1", now)
+	if base.Init() != nil || base.hasChanges() {
+		t.Fatal("new edit form should contain unchanged values")
+	}
+	if got := strings.Join(base.changeSummary(), ";"); got != "No field values changed." {
+		t.Fatalf("unchanged summary=%q", got)
+	}
+	cases := []struct {
+		name, errorText string
+		change          func(*sessionEditModel)
+	}{
+		{name: "empty project", errorText: "Project cannot be empty", change: func(m *sessionEditModel) { m.project = " " }},
+		{name: "future start", errorText: "Start time cannot be in the future", change: func(m *sessionEditModel) { m.start = now.Add(time.Hour); m.stop = now.Add(2 * time.Hour) }},
+		{name: "future stop", errorText: "Stop time cannot be in the future", change: func(m *sessionEditModel) { m.stop = now.Add(time.Hour) }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			model := base
+			tc.change(&model)
+			model, _ = sessionEditUpdate(model, tea.KeyMsg{Type: tea.KeyCtrlS})
+			if model.confirm || !strings.Contains(model.errorText, tc.errorText) {
+				t.Fatalf("validation error=%q confirm=%v", model.errorText, model.confirm)
+			}
+		})
+	}
+	for _, field := range []sessionEditField{editProject, editStart, editStop} {
+		model := base
+		model.field = field
+		model, _ = sessionEditUpdate(model, tea.KeyMsg{Type: tea.KeyEnter})
+		model, _ = sessionEditUpdate(model, tea.KeyMsg{Type: tea.KeyCtrlU})
+		if field != editProject {
+			model, _ = sessionEditUpdate(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("invalid")})
+		}
+		model, _ = sessionEditUpdate(model, tea.KeyMsg{Type: tea.KeyCtrlS})
+		if !model.editing || model.errorText == "" || model.confirm {
+			t.Fatalf("invalid field %v did not remain editable: %#v", field, model)
+		}
+		if !strings.Contains(model.View(), "review save") {
+			t.Fatal("editing controls missing")
+		}
+		model, _ = sessionEditUpdate(model, tea.KeyMsg{Type: tea.KeyEsc})
+		if model.editing || model.canceled || model.errorText != "" {
+			t.Fatal("escape while editing should keep original value")
+		}
+	}
+	model := base
+	model.field = editMessage
+	model, _ = sessionEditUpdate(model, tea.KeyMsg{Type: tea.KeyEnter})
+	model, _ = sessionEditUpdate(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("éx")})
+	model, _ = sessionEditUpdate(model, tea.KeyMsg{Type: tea.KeyBackspace})
+	model, _ = sessionEditUpdate(model, tea.KeyMsg{Type: tea.KeySpace})
+	model, _ = sessionEditUpdate(model, tea.KeyMsg{Type: tea.KeyDelete})
+	if string(model.input) != "é" {
+		t.Fatalf("Unicode editing=%q", string(model.input))
+	}
+	model, _ = sessionEditUpdate(model, tea.KeyMsg{Type: tea.KeyCtrlC})
+	if !model.canceled {
+		t.Fatal("Ctrl+C did not cancel while editing")
+	}
+	model = base
+	model, _ = sessionEditUpdate(model, tea.KeyMsg{Type: tea.KeyUp})
+	if model.field != editSave {
+		t.Fatal("up should wrap to Save")
+	}
+	model, _ = sessionEditUpdate(model, tea.KeyMsg{Type: tea.KeyDown})
+	if model.field != editProject {
+		t.Fatal("down should wrap to Project")
+	}
+	model, _ = sessionEditUpdate(model, tea.KeyMsg{Type: tea.KeyEsc})
+	if !model.canceled {
+		t.Fatal("escape did not cancel form")
+	}
+	if tags := splitEditTags(" "); len(tags) != 0 {
+		t.Fatalf("empty tags=%v", tags)
+	}
+}
+
+func TestSessionEditEndValueSummaryAndResize(t *testing.T) {
+	now := time.Date(2026, time.October, 28, 12, 0, 0, 0, time.UTC)
+	stop := now.Add(-time.Hour).Unix()
+	frame := store.Frame{Start: stop - 3600, Stop: &stop, Project: "alpha", Message: "original"}
+	model := newSessionEditModel(frame, "-1", now)
+	updated, _ := model.Update(tea.WindowSizeMsg{Width: 100})
+	model = updated.(sessionEditModel)
+	if model.width != 100 {
+		t.Fatal("form ignored resize")
+	}
+	model.field = editStop
+	model, _ = sessionEditUpdate(model, tea.KeyMsg{Type: tea.KeyEnter})
+	model, _ = sessionEditUpdate(model, tea.KeyMsg{Type: tea.KeyCtrlU})
+	model, _ = sessionEditUpdate(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("11:30")})
+	model, _ = sessionEditUpdate(model, tea.KeyMsg{Type: tea.KeyEnter})
+	if model.stop.Hour() != 11 || model.stop.Minute() != 30 || !model.hasChanges() {
+		t.Fatal("end time edit was lost")
+	}
+	model.message = "updated"
+	model.field = editSave
+	model, _ = sessionEditUpdate(model, tea.KeyMsg{Type: tea.KeyCtrlS})
+	view := model.View()
+	if !strings.Contains(view, "End:") || !strings.Contains(view, "Message: original → updated") {
+		t.Fatalf("missing change summary: %s", view)
+	}
+	model, _ = sessionEditUpdate(model, tea.KeyMsg{Type: tea.KeyEsc})
+	if model.confirm || model.canceled {
+		t.Fatal("escape from confirmation should return to form")
+	}
+	model.stop = model.start
+	if !strings.Contains(model.View(), "Duration:") {
+		t.Fatal("invalid duration view missing")
+	}
+}
+
+func TestSessionEditFormRequiresTerminal(t *testing.T) {
+	cmd := &cobra.Command{}
+	cmd.SetIn(strings.NewReader(""))
+	cmd.SetOut(&strings.Builder{})
+	model := sessionEditModel{project: "original"}
+	got, err := runSessionEditForm(cmd, model)
+	if err == nil || !strings.Contains(err.Error(), "requires a terminal") || got.project != "original" {
+		t.Fatalf("nonterminal form changed model or omitted error: project=%q err=%v", got.project, err)
+	}
 }

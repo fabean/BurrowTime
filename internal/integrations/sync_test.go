@@ -524,3 +524,176 @@ func TestTagOnlyDescriptions(t *testing.T) {
 		}
 	}
 }
+
+func TestProjectionRejectsUnsafeExports(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name, want string
+		mutate     func(*store.Frame, *Connection, *Mapping)
+	}{
+		{name: "oversized Timetable ID", want: "128-character", mutate: func(f *store.Frame, c *Connection, _ *Mapping) {
+			c.Plugin = "timetable"
+			f.ID = strings.Repeat("x", 129)
+		}},
+		{name: "overflow duration", want: "duration overflow", mutate: func(f *store.Frame, _ *Connection, _ *Mapping) {
+			f.Start = -1
+			stop := int64(1<<63 - 1)
+			f.Stop = &stop
+		}},
+		{name: "invalid rounding", want: "rounding mode", mutate: func(_ *store.Frame, c *Connection, _ *Mapping) { c.Rounding.Mode = "bad" }},
+		{name: "rounded zero", want: "zero seconds", mutate: func(f *store.Frame, c *Connection, _ *Mapping) {
+			stop := f.Start + 1
+			f.Stop = &stop
+			c.Rounding = Rounding{Mode: "nearest", Increment: "1h"}
+		}},
+		{name: "rounded end overflow", want: "end overflows", mutate: func(f *store.Frame, _ *Connection, _ *Mapping) {
+			f.Start = 1<<63 - 100
+			stop := int64(1<<63 - 1)
+			f.Stop = &stop
+		}},
+		{name: "oversized description", want: "3000-character", mutate: func(f *store.Frame, _ *Connection, _ *Mapping) { f.Tags = []string{strings.Repeat("a", 3001)} }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			config, frames := fixture()
+			c := config.Connections["work"]
+			m := config.Projects["portal"]
+			f := frames[0]
+			tc.mutate(&f, &c, &m)
+			if _, err := Projection(f, "work", c, m); err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("got %v want %q", err, tc.want)
+			}
+		})
+	}
+}
+
+func TestValidateConnectionRejectsMissingFields(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		c    Connection
+	}{{name: "unsupported", c: Connection{Plugin: "other"}}, {name: "key", c: Connection{Plugin: "clockify"}}, {name: "workspace", c: Connection{Plugin: "clockify", APIKeyEnv: "KEY", UserID: "user"}}, {name: "Timetable URL", c: Connection{Plugin: "timetable", APIKeyEnv: "KEY", UserID: "user"}}} {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := ValidateConnection(tc.c); err == nil {
+				t.Fatal("accepted invalid connection")
+			}
+		})
+	}
+}
+
+func TestSyncPreflightFailuresDoNotCreateEntries(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name, want string
+		change     func(*Config, []store.Frame, string)
+		call       Caller
+	}{
+		{name: "missing connection", want: "not configured", change: func(c *Config, _ []store.Frame, _ string) { delete(c.Connections, "work") }},
+		{name: "invalid connection", want: "unsupported connector", change: func(c *Config, _ []store.Frame, _ string) { c.Connections["work"] = Connection{Plugin: "unknown"} }},
+		{name: "corrupt ledger", want: "invalid", change: func(_ *Config, _ []store.Frame, dir string) {
+			if err := os.WriteFile(filepath.Join(dir, "integration-sync.json"), []byte("{"), 0600); err != nil {
+				panic(err)
+			}
+		}},
+		{name: "mapping missing ID", want: "no remote mapping", change: func(c *Config, _ []store.Frame, _ string) {
+			m := c.Projects["portal"]
+			m.ProjectID = ""
+			c.Projects["portal"] = m
+		}},
+		{name: "token check", want: "check failed", call: func(context.Context, Request) (Response, error) { return Response{}, errors.New("check failed") }},
+		{name: "wrong user", want: "another user", call: func(context.Context, Request) (Response, error) { return Response{UserID: "other"}, nil }},
+		{name: "project lookup", want: "projects failed", call: func(_ context.Context, r Request) (Response, error) {
+			if r.Operation == "check" {
+				return Response{UserID: "user"}, nil
+			}
+			return Response{}, errors.New("projects failed")
+		}},
+		{name: "inaccessible project", want: "not accessible", call: func(context.Context, Request) (Response, error) { return Response{UserID: "user"}, nil }},
+		{name: "missing remote ID", want: "missing remote ID", call: func(_ context.Context, r Request) (Response, error) {
+			if r.Operation == "check" {
+				return Response{UserID: "user"}, nil
+			}
+			if r.Operation == "projects" {
+				return Response{Projects: []Project{{ID: "project"}}}, nil
+			}
+			return Response{}, nil
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c, frames := fixture()
+			dir := t.TempDir()
+			if tc.change != nil {
+				tc.change(&c, frames, dir)
+			}
+			creates := 0
+			call := tc.call
+			if call == nil {
+				call = mockCall(&creates)
+			}
+			if err := Sync(context.Background(), dir, c, frames, Options{Connection: "work"}, call, io.Discard); err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("got %v want %q", err, tc.want)
+			}
+			if creates != 0 {
+				t.Fatalf("created %d entries", creates)
+			}
+		})
+	}
+}
+
+func TestSyncSkipsRunningOutsideRangeAndOtherConnection(t *testing.T) {
+	t.Parallel()
+	c, frames := fixture()
+	running := frames[0]
+	running.ID = "running"
+	running.Stop = nil
+	other := frames[0]
+	other.ID = "other"
+	other.Project = "other"
+	c.Projects["other"] = Mapping{Connection: "different", ProjectID: "p"}
+	frames = append(frames, running, other)
+	creates := 0
+	opts := Options{Connection: "work", From: time.Unix(2000, 0), DryRun: true}
+	if err := Sync(context.Background(), t.TempDir(), c, frames, opts, mockCall(&creates), io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	opts.From = time.Time{}
+	if err := Sync(context.Background(), t.TempDir(), c, frames, opts, mockCall(&creates), io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	if creates != 0 {
+		t.Fatal("dry run created entries")
+	}
+}
+
+func TestResolveRejectsAbsentWrongConnectionOrFailedLookup(t *testing.T) {
+	t.Parallel()
+	c, frames := fixture()
+	connection := c.Connections["work"]
+	r, err := Projection(frames[0], "work", connection, c.Projects["portal"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name, want string
+		receipt    bool
+		corrupt    bool
+		connection string
+		call       Caller
+	}{{name: "absent", connection: "work", want: "no pending"}, {name: "wrong connection", receipt: true, connection: "other", want: "another connection"}, {name: "lookup failure", receipt: true, connection: "work", want: "lookup failed", call: func(context.Context, Request) (Response, error) { return Response{}, errors.New("lookup failed") }}, {name: "corrupt", corrupt: true, connection: "work", want: "invalid"}} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			if tc.receipt {
+				if err := SaveLedger(dir, Ledger{Version: 1, Records: map[string]Receipt{r.FrameID: r}}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if tc.corrupt {
+				if err := os.WriteFile(filepath.Join(dir, "integration-sync.json"), []byte("{"), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := Resolve(context.Background(), dir, tc.connection, r.FrameID, "remote", connection, tc.call); err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("got %v want %q", err, tc.want)
+			}
+		})
+	}
+}

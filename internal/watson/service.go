@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"maps"
 	"path/filepath"
 	"reflect"
 	"sort"
@@ -87,6 +88,19 @@ func (s *Service) SetFrameMessage(ref, message string) (store.Frame, error) {
 	f, i, err := s.Lookup(ref)
 	if err != nil {
 		return store.Frame{}, err
+	}
+	if (f.ID == "" || f.IDNull) && strings.TrimSpace(message) != "" {
+		id, err := newID()
+		if err != nil {
+			return store.Frame{}, err
+		}
+		f.ID, f.IDNull = id, false
+		frames := append([]store.Frame(nil), s.Frames...)
+		frames[i] = f
+		if err := s.Repo.SaveFrames(frames); err != nil {
+			return store.Frame{}, err
+		}
+		s.Frames = frames
 	}
 	f.Message = message
 	if strings.TrimSpace(message) == "" {
@@ -269,19 +283,15 @@ func (s *Service) stopTimer(ref string, at *time.Time, sessionID string, status 
 	if err != nil {
 		return store.Frame{}, err
 	}
-	if message := s.Messages.Timers[timer.ID]; message != "" {
+	messages := copySessionMessages(s.Messages)
+	if message := messages.Timers[timer.ID]; message != "" {
 		frame.Message = message
-		s.Messages.Frames[frame.ID] = message
-		delete(s.Messages.Timers, timer.ID)
+		messages.Frames[frame.ID] = message
 	}
+	delete(messages.Timers, timer.ID)
 	frames := append(append([]store.Frame(nil), s.Frames...), frame)
 	if err := s.Repo.SaveFrames(frames); err != nil {
 		return store.Frame{}, err
-	}
-	if frame.Message != "" {
-		if err := s.Repo.SaveSessionMessages(s.Messages); err != nil {
-			return store.Frame{}, err
-		}
 	}
 	concurrent := append([]store.ActiveTimer(nil), s.Concurrent...)
 	state := s.State
@@ -304,6 +314,15 @@ func (s *Service) stopTimer(ref string, at *time.Time, sessionID string, status 
 			return store.Frame{}, err
 		}
 	}
+	if promotedTimerID != "" {
+		if message := messages.Timers[promotedTimerID]; message != "" {
+			messages.Timers[PrimaryTimerID] = message
+		}
+		delete(messages.Timers, promotedTimerID)
+	}
+	if err := s.Repo.SaveSessionMessages(messages); err != nil {
+		return store.Frame{}, err
+	}
 	sessions, sessionsChanged, sessionErr := stoppedAgentSessions(s.AgentSessions, timer.ID, promotedTimerID, frame, stop.Unix(), sessionID, status)
 	if sessionErr != nil {
 		return store.Frame{}, sessionErr
@@ -314,6 +333,7 @@ func (s *Service) stopTimer(ref string, at *time.Time, sessionID string, status 
 		}
 	}
 	s.Frames, s.State, s.Concurrent, s.AgentSessions = frames, state, concurrent, sessions
+	s.Messages = messages
 	return frame, nil
 }
 
@@ -339,6 +359,7 @@ func (s *Service) stopAll(at *time.Time, minuteMode bool) ([]store.Frame, error)
 		stop = *at
 	}
 	stopped := make([]store.Frame, 0, len(timers))
+	messages := copySessionMessages(s.Messages)
 	for _, timer := range timers {
 		stopAt := stop
 		agentOwned := false
@@ -363,18 +384,18 @@ func (s *Service) stopAll(at *time.Time, minuteMode bool) ([]store.Frame, error)
 		if err != nil {
 			return nil, err
 		}
-		if message := s.Messages.Timers[timer.ID]; message != "" {
+		if message := messages.Timers[timer.ID]; message != "" {
 			frame.Message = message
-			s.Messages.Frames[frame.ID] = message
-			delete(s.Messages.Timers, timer.ID)
+			messages.Frames[frame.ID] = message
 		}
+		delete(messages.Timers, timer.ID)
 		stopped = append(stopped, frame)
 	}
 	frames := append(append([]store.Frame(nil), s.Frames...), stopped...)
 	if err := s.Repo.SaveFrames(frames); err != nil {
 		return nil, err
 	}
-	if err := s.Repo.SaveSessionMessages(s.Messages); err != nil {
+	if err := s.Repo.SaveSessionMessages(messages); err != nil {
 		return nil, err
 	}
 	if err := s.Repo.SaveState(store.State{}); err != nil {
@@ -400,6 +421,7 @@ func (s *Service) stopAll(at *time.Time, minuteMode bool) ([]store.Frame, error)
 		}
 	}
 	s.Frames, s.State, s.Concurrent, s.AgentSessions = frames, store.State{}, []store.ActiveTimer{}, sessions
+	s.Messages = messages
 	return stopped, nil
 }
 
@@ -495,6 +517,17 @@ func (s *Service) Cancel() (store.State, error) {
 			return store.State{}, err
 		}
 	}
+	messages := copySessionMessages(s.Messages)
+	delete(messages.Timers, PrimaryTimerID)
+	if promotedTimerID != "" {
+		if message := messages.Timers[promotedTimerID]; message != "" {
+			messages.Timers[PrimaryTimerID] = message
+		}
+		delete(messages.Timers, promotedTimerID)
+	}
+	if err := s.Repo.SaveSessionMessages(messages); err != nil {
+		return store.State{}, err
+	}
 	sessions, changed := canceledAgentSessions(s.AgentSessions, PrimaryTimerID, promotedTimerID, s.Now().Unix())
 	if changed {
 		if err := s.Repo.SaveAgentSessions(sessions); err != nil {
@@ -502,6 +535,7 @@ func (s *Service) Cancel() (store.State, error) {
 		}
 	}
 	s.State, s.Concurrent, s.AgentSessions = state, concurrent, sessions
+	s.Messages = messages
 	return old, nil
 }
 
@@ -592,6 +626,10 @@ func (s *Service) MergeReport(path string) (conflicting, merging []store.Frame, 
 		found := false
 		for _, original := range s.Frames {
 			if original.ID == candidate.ID {
+				candidate.Message = original.Message
+				if len(original.Tags) == 0 && len(candidate.Tags) == 0 {
+					original.Tags, candidate.Tags = nil, nil
+				}
 				found = true
 				if !reflect.DeepEqual(original, candidate) {
 					conflicting = append(conflicting, candidate)
@@ -681,6 +719,19 @@ func (s *Service) Tags() []string {
 }
 
 func ptr(v int64) *int64 { return &v }
+
+func copySessionMessages(messages store.SessionMessages) store.SessionMessages {
+	frames := maps.Clone(messages.Frames)
+	if frames == nil {
+		frames = map[string]string{}
+	}
+	timers := maps.Clone(messages.Timers)
+	if timers == nil {
+		timers = map[string]string{}
+	}
+	return store.SessionMessages{Version: messages.Version, Frames: frames, Timers: timers}
+}
+
 func shortID(id string) string {
 	if len(id) > 7 {
 		return id[:7]

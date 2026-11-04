@@ -1,6 +1,10 @@
 package cli
 
 import (
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -18,6 +22,38 @@ func TestSplitCommandLine(t *testing.T) {
 	got := splitCommandLine(`--from "2026-08-17 09:00" 'multi word' +tag`)
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("want %#v, got %#v", want, got)
+	}
+}
+
+func TestReportAndAggregateShowUntaggedSessionMessages(t *testing.T) {
+	model := tuiTestModel()
+	model.now = time.Date(2026, 11, 4, 12, 0, 0, 0, time.UTC)
+	model.service.Now = func() time.Time { return model.now }
+	model.rangeIndex = 0
+	stop := model.now.Add(-time.Hour).Unix()
+	model.service.Frames = []store.Frame{
+		{Start: stop - 3600, Stop: &stop, Project: "project", Message: "untagged work"},
+		{Start: stop - 3600, Stop: &stop, Project: "project", Message: "untagged work"},
+		{Start: stop - 3600, Stop: &stop, Project: "project", Tags: []string{"ticket"}, Message: "tagged work"},
+	}
+	for _, tc := range []struct {
+		name  string
+		lines func() []string
+	}{
+		{name: "report", lines: func() []string { return strings.Split(model.reportView(), "\n") }},
+		{name: "aggregate", lines: func() []string { return model.aggregateLines() }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			model.reportMessagesVisible, model.aggregateMessagesVisible = false, false
+			if hidden := strings.Join(tc.lines(), "\n"); strings.Contains(hidden, "work") {
+				t.Fatalf("hidden=%s", hidden)
+			}
+			model.reportMessagesVisible, model.aggregateMessagesVisible = true, true
+			shown := strings.Join(tc.lines(), "\n")
+			if strings.Count(shown, "↳ untagged work") != 1 || strings.Count(shown, "↳ tagged work") != 1 || !strings.Contains(shown, "3h 00m 00s") {
+				t.Fatalf("shown=%s", shown)
+			}
+		})
 	}
 }
 
@@ -572,5 +608,506 @@ func TestNegativeFrameIndexNormalization(t *testing.T) {
 	got := normalizeNegativeFrameArgs([]string{"--watson-dir", "x", "remove", "-2", "--force"})
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("want %#v got %#v", want, got)
+	}
+}
+
+func TestDashboardStartupErrorRemainsUsable(t *testing.T) {
+	blocked := filepath.Join(t.TempDir(), "file")
+	if err := os.WriteFile(blocked, []byte("not a directory"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	model := newDashboardModel(filepath.Join(blocked, "data"))
+	if model.loadErr == nil {
+		t.Fatal("invalid directory unexpectedly opened")
+	}
+	if view := model.View(); !strings.Contains(view, "Could not load BurrowTime data") {
+		t.Fatalf("startup error not rendered: %s", view)
+	}
+	for _, msg := range []tea.Msg{tea.WindowSizeMsg{Width: 30, Height: 10}, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}}, tea.MouseMsg{Button: tea.MouseButtonWheelDown}, tuiTick(time.Now())} {
+		updated, cmd := model.Update(msg)
+		model = updated.(dashboardModel)
+		if cmd != nil || model.screen != tuiHome {
+			t.Fatal("startup error accepted navigation")
+		}
+	}
+	for _, key := range []tea.KeyMsg{{Type: tea.KeyRunes, Runes: []rune{'q'}}, {Type: tea.KeyCtrlC}} {
+		_, cmd := model.Update(key)
+		if cmd == nil {
+			t.Fatal("startup error cannot be dismissed")
+		}
+	}
+	loaded := newDashboardModel(t.TempDir())
+	if loaded.loadErr != nil || loaded.service == nil || loaded.Init() == nil {
+		t.Fatalf("valid dashboard did not initialize: %v", loaded.loadErr)
+	}
+}
+
+func TestDashboardNavigationAndQueryControls(t *testing.T) {
+	shortcuts := []struct {
+		name  string
+		key   rune
+		want  tuiScreen
+		input tuiInputMode
+		quit  bool
+	}{
+		{name: "log", key: 'l', want: tuiLog},
+		{name: "report", key: 'r', want: tuiReport},
+		{name: "aggregate", key: 'a', want: tuiAggregate},
+		{name: "commands", key: 'c', want: tuiCommands},
+		{name: "alternate commands", key: ':', want: tuiCommands},
+		{name: "start", key: 's', want: tuiHome, input: tuiInputCommand},
+		{name: "stop", key: 'x', want: tuiHome, quit: true},
+	}
+	for _, tc := range shortcuts {
+		t.Run(tc.name, func(t *testing.T) {
+			model, cmd := dashboardTestUpdate(tuiTestModel(), tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{tc.key}})
+			if model.screen != tc.want || model.inputMode != tc.input || (cmd != nil) != tc.quit {
+				t.Fatalf("shortcut state=%#v cmd=%v", model, cmd != nil)
+			}
+		})
+	}
+	for cursor := 0; cursor < 6; cursor++ {
+		model := tuiTestModel()
+		model.cursor = cursor
+		model, cmd := dashboardTestUpdate(model, tea.KeyMsg{Type: tea.KeyEnter})
+		if cursor == 4 && (cmd == nil || !reflect.DeepEqual(model.choice, []string{"stop"})) {
+			t.Fatal("stop quick action failed")
+		}
+		if cursor == 3 && model.inputMode != tuiInputCommand {
+			t.Fatal("start quick action failed")
+		}
+	}
+	model := tuiTestModel()
+	model, _ = dashboardTestUpdate(model, tea.KeyMsg{Type: tea.KeyUp})
+	if model.cursor != 5 {
+		t.Fatal("home cursor did not wrap")
+	}
+	model, _ = dashboardTestUpdate(model, tea.KeyMsg{Type: tea.KeyDown})
+	if model.cursor != 0 {
+		t.Fatal("home cursor did not wrap back")
+	}
+	model.openScreen(tuiCommands)
+	model, _ = dashboardTestUpdate(model, tea.KeyMsg{Type: tea.KeyUp})
+	if model.commandCursor != len(menuItems)-1 {
+		t.Fatal("command cursor did not wrap")
+	}
+	model, _ = dashboardTestUpdate(model, tea.KeyMsg{Type: tea.KeyDown})
+	if model.commandCursor != 0 {
+		t.Fatal("command cursor did not return to start")
+	}
+	model.commandCursor = 2
+	model, cmd := dashboardTestUpdate(model, tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil || !reflect.DeepEqual(model.choice, []string{"status"}) {
+		t.Fatal("argumentless menu command not launched")
+	}
+	for _, name := range []string{"log", "report", "aggregate", "add"} {
+		model = tuiTestModel()
+		for _, item := range menuItems {
+			if item.name == name {
+				updated, _ := model.activateMenuItem(item)
+				model = updated.(dashboardModel)
+				break
+			}
+		}
+		if name == "add" && model.inputMode != tuiInputCommand {
+			t.Fatal("argument command did not open input")
+		}
+		if name != "add" && model.screen == tuiHome {
+			t.Fatalf("menu %s did not open view", name)
+		}
+	}
+	model = tuiTestModel()
+	model.screen = tuiLog
+	model, _ = dashboardTestUpdate(model, tea.KeyMsg{Type: tea.KeyLeft})
+	if model.rangeIndex != 0 {
+		t.Fatal("previous range not selected")
+	}
+	model, _ = dashboardTestUpdate(model, tea.KeyMsg{Type: tea.KeyRight})
+	if model.rangeIndex != 1 {
+		t.Fatal("next range not selected")
+	}
+	for _, key := range []tea.KeyMsg{{Type: tea.KeyDown}, {Type: tea.KeyUp}, {Type: tea.KeyPgDown}, {Type: tea.KeyPgUp}, {Type: tea.KeyEnd}, {Type: tea.KeyHome}} {
+		model, _ = dashboardTestUpdate(model, key)
+		if model.scroll < 0 || model.scroll > model.maxScroll() {
+			t.Fatal("query scrolled outside bounds")
+		}
+	}
+	model, _ = dashboardTestUpdate(model, tea.MouseMsg{Button: tea.MouseButtonWheelDown})
+	model, _ = dashboardTestUpdate(model, tea.MouseMsg{Button: tea.MouseButtonWheelUp})
+	model.filter = "alpha"
+	model, _ = dashboardTestUpdate(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'c'}})
+	if model.filter != "" {
+		t.Fatal("clear filter shortcut failed")
+	}
+	model, _ = dashboardTestUpdate(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'b'}})
+	if model.screen != tuiHome {
+		t.Fatal("back did not return home")
+	}
+	_, cmd = dashboardTestUpdate(model, tea.KeyMsg{Type: tea.KeyCtrlC})
+	if cmd == nil {
+		t.Fatal("Ctrl+C did not quit")
+	}
+}
+
+func TestDashboardQueryInputAndTick(t *testing.T) {
+	model := tuiTestModel()
+	model.screen = tuiLog
+	model, _ = dashboardTestUpdate(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}})
+	model, _ = dashboardTestUpdate(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("alphaé")})
+	model, _ = dashboardTestUpdate(model, tea.KeyMsg{Type: tea.KeyBackspace})
+	model, _ = dashboardTestUpdate(model, tea.KeyMsg{Type: tea.KeySpace})
+	model, _ = dashboardTestUpdate(model, tea.KeyMsg{Type: tea.KeyDelete})
+	if model.filter != "alpha" {
+		t.Fatalf("live filter=%q", model.filter)
+	}
+	if view := model.View(); !strings.Contains(view, "/ alpha") {
+		t.Fatalf("live filter not displayed: %s", view)
+	}
+	model, _ = dashboardTestUpdate(model, tea.KeyMsg{Type: tea.KeyEnter})
+	if model.inputMode != tuiInputNone || model.filter != "alpha" {
+		t.Fatal("filter submit failed")
+	}
+	model, _ = dashboardTestUpdate(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}})
+	model, _ = dashboardTestUpdate(model, tea.KeyMsg{Type: tea.KeyEsc})
+	if model.inputMode != tuiInputNone {
+		t.Fatal("escape did not leave filter input")
+	}
+	before := model.now
+	model, cmd := dashboardTestUpdate(model, tuiTick(before.Add(time.Second)))
+	if !model.now.Equal(before.Add(time.Second)) || model.cursorVisible || cmd == nil {
+		t.Fatal("tick did not advance display and schedule refresh")
+	}
+	model.beginCommand(menuItems[0])
+	model.cursorVisible = false
+	if view := model.View(); !strings.Contains(view, "Example") || !strings.Contains(view, "COMMAND ARGUMENTS") {
+		t.Fatalf("command prompt missing context: %s", view)
+	}
+	model.command.example = ""
+	if view := model.View(); !strings.Contains(view, "run command") {
+		t.Fatal("command prompt missing controls")
+	}
+	model.loadErr = errors.New("bad data")
+	model.service = nil
+	model.width, model.height = 0, 0
+	if !strings.Contains(model.View(), "bad data") {
+		t.Fatal("startup error detail missing")
+	}
+}
+
+func TestDashboardViewsCoverEmptyActiveAndHistoricalData(t *testing.T) {
+	model := tuiTestModel()
+	model.width, model.height = 130, 40
+	model.service.State = store.State{Project: "active", Start: model.now.Add(time.Minute).Unix(), Tags: []string{"ticket"}}
+	if view := model.View(); !strings.Contains(view, "active") || !strings.Contains(view, "00s  elapsed") {
+		t.Fatalf("future active timer was not clamped: %s", view)
+	}
+	for i := 0; i < 4; i++ {
+		model.service.Concurrent = append(model.service.Concurrent, store.ActiveTimer{ID: fmt.Sprint(i), Project: "concurrent", Start: model.now.Add(-time.Hour).Unix()})
+	}
+	if !strings.Contains(model.View(), "…and 2 more") {
+		t.Fatal("hidden running timers not summarized")
+	}
+	model.service.State = store.State{}
+	model.service.Concurrent = nil
+	for _, screen := range []tuiScreen{tuiReport, tuiCommands, tuiLog, tuiAggregate} {
+		model.screen = screen
+		if view := model.View(); !strings.Contains(view, "BURROWTIME") {
+			t.Fatalf("screen %v missing brand", screen)
+		}
+	}
+	model.commandCursor = len(menuItems) - 1
+	if !strings.Contains(model.View(), "BURROWTIME") {
+		t.Fatal("view failed after cursor moved")
+	}
+	model.screen = tuiCommands
+	if !strings.Contains(model.View(), "config") {
+		t.Fatal("last command not visible")
+	}
+	model.screen = tuiReport
+	model.reportMessagesVisible = true
+	model.service.Frames[0].Message = "shipped alpha"
+	model.service.Frames = append(model.service.Frames, model.service.Frames[0])
+	view := model.View()
+	if strings.Count(view, "shipped alpha") != 1 {
+		t.Fatalf("report repeated or dropped shared message: %s", view)
+	}
+	model.service.Frames = nil
+	for _, screen := range []tuiScreen{tuiHome, tuiLog, tuiReport, tuiAggregate} {
+		model.screen = screen
+		if view := model.View(); !strings.Contains(view, "No ") {
+			t.Fatalf("screen %v missing empty state: %s", screen, view)
+		}
+	}
+	model.width, model.height = 60, 32
+	model.screen = tuiHome
+	if !strings.Contains(model.View(), "RECENT") {
+		t.Fatal("tall narrow dashboard omitted recent sessions")
+	}
+	for _, index := range []int{2, 3, 4} {
+		model.rangeIndex = index
+		if _, err := model.tuiOptions(true); err != nil {
+			t.Fatal(err)
+		}
+	}
+	model.rangeIndex = 4
+	model.service.Now = func() time.Time { return time.Date(1960, time.January, 1, 0, 0, 0, 0, time.UTC) }
+	if _, err := model.tuiOptions(true); err == nil {
+		t.Fatal("all-time range before epoch accepted")
+	}
+	if got := model.tuiFrames(true); got != nil {
+		t.Fatalf("invalid options returned frames: %v", got)
+	}
+	if total := model.totalForRange(4); total != 0 {
+		t.Fatalf("invalid options produced total: %v", total)
+	}
+	if summaries, frames := model.aggregateSummariesWithFrames(); summaries != nil || frames != nil {
+		t.Fatal("invalid options produced summaries")
+	}
+}
+
+func TestDashboardLegacyFramesAndEditEdgeCases(t *testing.T) {
+	model := tuiTestModel()
+	model.screen = tuiLog
+	model.service.Frames[0].ID = ""
+	model.service.Frames = append(model.service.Frames, model.service.Frames[0])
+	options := model.logDisplayFrames()
+	if options[0].ref == options[1].ref || options[0].ref == "" || options[1].ref == "" {
+		t.Fatalf("legacy frames share reference: %#v", options)
+	}
+	base := model.service.Frames[0]
+	cases := []struct {
+		name   string
+		change func(*store.Frame)
+		want   bool
+	}{
+		{name: "same", change: func(f *store.Frame) {}, want: true},
+		{name: "different project", change: func(f *store.Frame) { f.Project = "different" }},
+		{name: "different tags", change: func(f *store.Frame) { f.Tags = []string{"other"} }},
+		{name: "different stop", change: func(f *store.Frame) { stop := *f.Stop + 1; f.Stop = &stop }},
+		{name: "missing stop", change: func(f *store.Frame) { f.Stop = nil }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			changed := base
+			tc.change(&changed)
+			if got := sameFrameIdentity(base, changed); got != tc.want {
+				t.Fatalf("sameFrameIdentity=%v", got)
+			}
+		})
+	}
+	if !sameFrameIdentity(store.Frame{}, store.Frame{}) {
+		t.Fatal("matching active identities rejected")
+	}
+	model.service.Frames = nil
+	model.startLogEditSelection()
+	if model.logEditMode || !strings.Contains(model.editNotice, "No completed") {
+		t.Fatal("empty edit selection did not explain absence")
+	}
+	model.logEditMode = true
+	model.moveLogEditSelection(1)
+	if model.logEditMode || model.logEditRef != "" {
+		t.Fatal("selection did not leave empty view")
+	}
+	model.openLogEditForm()
+	if model.editForm != nil {
+		t.Fatal("empty selection opened form")
+	}
+	model.keepLogEditSelectionVisible()
+	model.screen = tuiEdit
+	model, _ = dashboardTestUpdate(model, tea.KeyMsg{Type: tea.KeyEnter})
+	if model.screen != tuiLog {
+		t.Fatal("missing edit form did not return to log")
+	}
+	model = tuiTestModel()
+	model.screen = tuiLog
+	model.startLogEditSelection()
+	model.openLogEditForm()
+	model.editForm.confirm = true
+	model, _ = dashboardTestUpdate(model, tea.KeyMsg{Type: tea.KeyEnter})
+	if model.screen != tuiLog || model.editNotice != "No changes made." {
+		t.Fatal("unchanged edit was not dismissed")
+	}
+	model.openLogEditForm()
+	model.editForm.project = " "
+	model.editForm.confirm = true
+	model, _ = dashboardTestUpdate(model, tea.KeyMsg{Type: tea.KeyEnter})
+	if model.editForm == nil || model.editForm.errorText == "" || model.editForm.confirmed {
+		t.Fatal("failed save dropped form or error")
+	}
+}
+
+func TestTimerPickersNavigationAndViews(t *testing.T) {
+	now := time.Date(2026, time.October, 28, 12, 0, 0, 0, time.UTC)
+	timers := []store.ActiveTimer{}
+	for i := 0; i < 7; i++ {
+		timers = append(timers, store.ActiveTimer{ID: fmt.Sprint(i), Project: fmt.Sprintf("project-%d", i), Start: now.Add(time.Minute).Unix(), Tags: []string{"ticket"}})
+	}
+	conflict := startConflictModel{timers: timers, project: "new", tags: []string{"new-tag"}, now: now}
+	if conflict.Init() != nil || !strings.Contains(conflict.View(), "and 2 more") {
+		t.Fatal("conflict summary missing overflow")
+	}
+	updated, _ := conflict.Update(tea.WindowSizeMsg{Width: 100})
+	conflict = updated.(startConflictModel)
+	updated, _ = conflict.Update(tea.KeyMsg{Type: tea.KeyUp})
+	conflict = updated.(startConflictModel)
+	if conflict.cursor != 1 {
+		t.Fatal("conflict cursor did not wrap")
+	}
+	updated, _ = conflict.Update(tea.KeyMsg{Type: tea.KeyDown})
+	conflict = updated.(startConflictModel)
+	if conflict.cursor != 0 {
+		t.Fatal("conflict cursor did not return")
+	}
+	for _, key := range []tea.KeyMsg{{Type: tea.KeyRunes, Runes: []rune{'r'}}, {Type: tea.KeyEnter}, {Type: tea.KeyEsc}} {
+		updated, cmd := conflict.Update(key)
+		current := updated.(startConflictModel)
+		if cmd == nil || current.selection == "" && !current.canceled {
+			t.Fatal("conflict action did not complete")
+		}
+	}
+	picker := stopPickerModel{timers: timers, now: now}
+	if picker.Init() != nil || !strings.Contains(picker.View(), "project-0") || !strings.Contains(picker.View(), "#ticket") {
+		t.Fatal("stop picker missing active timer details")
+	}
+	updated, _ = picker.Update(tea.WindowSizeMsg{Width: 100})
+	picker = updated.(stopPickerModel)
+	updated, _ = picker.Update(tea.KeyMsg{Type: tea.KeyUp})
+	picker = updated.(stopPickerModel)
+	if picker.cursor != len(timers) || !strings.Contains(picker.View(), "Stop all running timers") {
+		t.Fatal("stop picker did not wrap to all")
+	}
+	updated, cmd := picker.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil || updated.(stopPickerModel).selection != stopAllSelection {
+		t.Fatal("all option not selected")
+	}
+	updated, _ = picker.Update(tea.KeyMsg{Type: tea.KeyDown})
+	picker = updated.(stopPickerModel)
+	if picker.cursor != 0 {
+		t.Fatal("stop picker did not wrap to first timer")
+	}
+	for _, key := range []tea.KeyMsg{{Type: tea.KeyRunes, Runes: []rune{'a'}}, {Type: tea.KeyEsc}} {
+		updated, cmd = picker.Update(key)
+		if cmd == nil || updated.(stopPickerModel).selection == "" && !updated.(stopPickerModel).canceled {
+			t.Fatal("stop picker action not completed")
+		}
+	}
+}
+
+func TestTerminalTextHelpersPreserveQuotedAndUnicodeInput(t *testing.T) {
+	if got := splitCommandLine("alpha\\ beta '' \"quoted\\\"text\" 'literal\\path'"); !reflect.DeepEqual(got, []string{"alpha beta", "", "quoted\"text", "literal\\path"}) {
+		t.Fatalf("quoted arguments=%#v", got)
+	}
+	if truncate("abc", 0) != "" || truncate("abc", 1) != "…" || truncate("éabc", 3) != "éa…" {
+		t.Fatal("truncation did not preserve Unicode boundaries")
+	}
+	if padBetween("long", "text", 1) != "long text" {
+		t.Fatal("narrow padding omitted required separator")
+	}
+	if wrapIndex(-1, 0) != 0 || wrapIndex(-1, 3) != 2 {
+		t.Fatal("index wrapping failed")
+	}
+}
+
+func dashboardTestUpdate(model dashboardModel, msg tea.Msg) (dashboardModel, tea.Cmd) {
+	updated, cmd := model.Update(msg)
+	return updated.(dashboardModel), cmd
+}
+
+func TestDashboardMessageViewsAndSave(t *testing.T) {
+	model := tuiTestModel()
+	s, err := watson.OpenData(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.Now = model.service.Now
+	s.Frames = model.service.Frames
+	if err := s.Repo.SaveFrames(s.Frames); err != nil {
+		t.Fatal(err)
+	}
+	model.service = s
+	model.screen = tuiLog
+	model.logMessagesVisible = true
+	model.service.Frames[0].Message = "first note"
+	for _, width := range []int{60, 100} {
+		model.width = width
+		if view := model.View(); !strings.Contains(view, "first note") {
+			t.Fatalf("width %d omitted log message: %s", width, view)
+		}
+	}
+	model.service.State = store.State{Project: "active", Start: model.now.Add(-time.Minute).Unix()}
+	if !strings.Contains(model.View(), "running") {
+		t.Fatal("active log entry not marked running")
+	}
+	model.startLogEditSelection()
+	model.openLogEditForm()
+	model, _ = dashboardTestUpdate(model, tea.WindowSizeMsg{Width: 80, Height: 24})
+	if model.editForm.width != 80 || !strings.Contains(model.View(), "EDIT SESSION") {
+		t.Fatal("editor resize or render failed")
+	}
+	model.editForm.message = "saved note"
+	model.editForm.confirm = true
+	model, _ = dashboardTestUpdate(model, tea.KeyMsg{Type: tea.KeyEnter})
+	if model.editForm != nil || model.service.Frames[0].Message != "saved note" {
+		t.Fatal("message edit not applied")
+	}
+	persisted, err := watson.OpenData(s.Repo.Dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if persisted.Frames[0].Message != "saved note" {
+		t.Fatal("message edit not persisted")
+	}
+	if !strings.Contains(model.View(), "Session saved") {
+		t.Fatal("save notice missing")
+	}
+	model, _ = dashboardTestUpdate(model, tea.KeyMsg{Type: tea.KeyUp})
+	model, _ = dashboardTestUpdate(model, tea.KeyMsg{Type: tea.KeyEsc})
+	if model.logEditMode || model.logEditRef != "" {
+		t.Fatal("escape did not exit edit selection")
+	}
+	model.screen = tuiAggregate
+	model, _ = dashboardTestUpdate(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'m'}})
+	if !model.aggregateMessagesVisible || !strings.Contains(model.View(), "saved note") {
+		t.Fatal("aggregate message toggle did not expose saved note")
+	}
+	summaries := model.aggregateSummaries()
+	if len(model.aggregateSummaryLines(summaries)) == 0 {
+		t.Fatal("aggregate summary lines missing")
+	}
+	model.screen = tuiReport
+	if model.currentLineCount() == 0 {
+		t.Fatal("report lines not counted")
+	}
+	model.screen = tuiHome
+	if model.currentLineCount() != 0 {
+		t.Fatal("home unexpectedly scrollable")
+	}
+	model.screen = tuiCommands
+	model, _ = dashboardTestUpdate(model, tea.KeyMsg{Type: tea.KeyEsc})
+	if model.screen != tuiHome {
+		t.Fatal("escape did not close command menu")
+	}
+	model.beginCommand(menuItems[0])
+	model.cursorVisible = true
+	if !strings.Contains(model.View(), "█") {
+		t.Fatal("command input cursor missing")
+	}
+	model.height = 10
+	_, position := model.viewport([]string{"a", "b", "c", "d", "e", "f"})
+	if !strings.Contains(position, "/ 6") {
+		t.Fatalf("long viewport missing position: %q", position)
+	}
+	_, cmd := dashboardTestUpdate(model, struct{}{})
+	if cmd != nil {
+		t.Fatal("unknown event scheduled work")
+	}
+	model, cmd = dashboardTestUpdate(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
+	if cmd != nil || string(model.input) != "q" {
+		t.Fatal("command input did not treat q as text")
+	}
+	model, _ = dashboardTestUpdate(model, tea.KeyMsg{Type: tea.KeyEsc})
+	_, cmd = dashboardTestUpdate(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
+	if cmd == nil {
+		t.Fatal("q did not quit command menu")
 	}
 }

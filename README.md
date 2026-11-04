@@ -491,7 +491,7 @@ burrowtime log --day
 burrowtime log --month --project "client portal"
 burrowtime report --week --tag billable
 burrowtime report --from 2026-08-01 --to 2026-08-15
-burrowtime aggregate --year
+burrowtime aggregate --from 2026-01-01 --to 2026-12-31
 ```
 
 Time inputs accept 24-hour values such as `14:30` and AM/PM values such as
@@ -538,7 +538,7 @@ burrowtime stop -m "Fixed migration mapping and updated tests"
 burrowtime add --from "2026-10-27 10:00" --to "2026-10-27 11:00" RAF +RAF-326 -m "Completed QA testing"
 burrowtime edit -1 -m "Updated description"
 burrowtime log --all --json
-burrowtime aggregate --week --show-messages
+burrowtime aggregate --from yesterday --show-messages
 ```
 
 Messages are optional and remain separate from tags, so adding different work
@@ -547,7 +547,8 @@ totals. Use `burrowtime edit -1 -m ""` to clear a message. In the TUI, Log
 messages are visible by default; Report and Aggregate messages are hidden by
 default. Press `m` to toggle visibility independently in each view. The CLI
 aggregate output hides messages by default; `--show-messages` displays them
-under their project and tag without changing totals.
+under their project and tag without changing totals. Untagged sessions show
+their messages directly under the project.
 
 <p align="center">
   <img src="assets/burrowtime-session-messages.gif" alt="BurrowTime starting a timer with a message, replacing it when stopping, and showing the saved message in aggregate output" width="900">

@@ -68,6 +68,9 @@ func (c *Client) Handle(ctx context.Context, r integrations.Request) (integratio
 	if err := integrations.ValidateConnection(r.Connection); err != nil {
 		return response, err
 	}
+	if r.Connection.Plugin != "clockify" {
+		return response, fmt.Errorf("invalid Clockify connection")
+	}
 	if c.Key == "" {
 		return response, fmt.Errorf("API key environment variable is empty")
 	}

@@ -23,8 +23,11 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      - name: Test
-        run: go test ./...
+      - name: Test and enforce 90% coverage
+        run: make coverage
+
+      - name: Race check
+        run: go test -race ./...
 
       - name: Vet
         run: go vet ./...

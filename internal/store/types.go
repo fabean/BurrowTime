@@ -51,6 +51,7 @@ func (f *Frame) UnmarshalJSON(data []byte) error {
 	if len(row) < 4 || len(row) > 6 {
 		return fmt.Errorf("frame must contain 4 to 6 values, got %d", len(row))
 	}
+	*f = Frame{}
 	if err := json.Unmarshal(row[0], &f.Start); err != nil {
 		return fmt.Errorf("invalid frame start: %w", err)
 	}

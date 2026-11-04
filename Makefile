@@ -1,4 +1,4 @@
-.PHONY: all build test vet clean install snapshot demos build-clockify install-clockify build-timetable install-timetable
+.PHONY: all build test coverage vet clean install snapshot demos build-clockify install-clockify build-timetable install-timetable
 
 all: test build
 
@@ -8,6 +8,13 @@ build:
 
 test:
 	go test ./...
+
+coverage:
+	go test -coverprofile=coverage.out ./...
+	@awk 'NR > 1 { total += $$2; if ($$3 > 0) covered += $$2 } END { \
+		if (total == 0) { print "No coverage statements found"; exit 1 } \
+		printf "Total statement coverage: %.2f%% (minimum 90%%)\n", 100 * covered / total; \
+		exit (covered * 100 < total * 90) }' coverage.out
 
 vet:
 	go vet ./...

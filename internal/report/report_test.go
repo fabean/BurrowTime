@@ -1,6 +1,8 @@
 package report
 
 import (
+	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -54,3 +56,55 @@ func TestConcurrentCurrentFramesAreProjected(t *testing.T) {
 }
 
 func ptr(v int64) *int64 { return &v }
+
+func TestReportJSONAndDayBounds(t *testing.T) {
+	t.Parallel()
+	for _, tt := range []struct {
+		name    string
+		seconds Seconds
+		want    string
+	}{{"whole", 12, "12.0"}, {"fraction", 1.25, "1.25"}, {"negative", -0.5, "-0.5"}} {
+		t.Run(tt.name, func(t *testing.T) {
+			data, err := json.Marshal(tt.seconds)
+			if err != nil || string(data) != tt.want || FormatSeconds(tt.seconds) != tt.want {
+				t.Fatalf("JSON=%s err=%v", data, err)
+			}
+		})
+	}
+	loc, err := time.LoadLocation("America/New_York")
+	if err != nil {
+		t.Fatal(err)
+	}
+	midday := time.Date(2026, 3, 8, 12, 30, 0, 0, loc)
+	from, to := DayBounds(midday, midday)
+	if from.Hour() != 0 || to.Hour() != 23 || to.Minute() != 59 || to.Second() != 59 || to.Nanosecond() != 999999000 || to.Sub(from) != 23*time.Hour-time.Microsecond {
+		t.Fatalf("DST day bounds=%v to %v duration=%v", from, to, to.Sub(from))
+	}
+	data, err := json.Marshal(Timespan{From: from, To: to})
+	if err != nil || !strings.Contains(string(data), `"from":"2026-03-08T00:00:00-05:00"`) || !strings.Contains(string(data), `"to":"2026-03-08T23:59:59.999999-04:00"`) {
+		t.Fatalf("timespan=%s err=%v", data, err)
+	}
+}
+
+func TestFilterProjectTagExclusionsAndPartialStop(t *testing.T) {
+	t.Parallel()
+	frames := []store.Frame{
+		{Start: 1, Stop: nil, Project: "running"},
+		{Start: 1, Stop: ptr(5), Project: "other", Tags: []string{"keep"}},
+		{Start: 1, Stop: ptr(5), Project: "ignored", Tags: []string{"keep"}},
+		{Start: 1, Stop: ptr(5), Project: "p", Tags: []string{"ignored"}},
+		{Start: 1, Stop: ptr(20), Project: "p", Tags: []string{"keep"}},
+	}
+	opts := Options{From: time.Unix(0, 0), To: time.Unix(10, 500000000), Projects: []string{"p", "ignored"}, IgnoreProjects: []string{"ignored"}, IgnoreTags: []string{"ignored"}, IncludePartial: true}
+	got := FilterActive(frames, []store.ActiveTimer{{ID: "inactive"}}, time.Unix(9, 0), opts)
+	if len(got) != 1 || *got[0].Stop != 10 || got[0].StopMicros != 500000 || *frames[4].Stop != 20 {
+		t.Fatalf("filtered=%#v original=%#v", got, frames)
+	}
+	if summary := Build(got, opts); summary.Time != 9.5 {
+		t.Fatalf("summary=%#v", summary)
+	}
+	opts.IncludeCurrent = true
+	if got := FilterActive(nil, []store.ActiveTimer{{}}, time.Unix(9, 0), opts); len(got) != 0 {
+		t.Fatalf("inactive timer projected: %#v", got)
+	}
+}

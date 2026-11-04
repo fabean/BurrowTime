@@ -18,9 +18,14 @@ go mod download
 
 ```bash
 make test
+make coverage
 make vet
 go test -race ./...
 ```
+
+`make coverage` checks statement coverage across the whole Go module, including
+command entry points, and fails below 90%. The profile is saved to `coverage.out`;
+view details with `go tool cover -html=coverage.out`.
 
 Use a temporary data directory when exercising commands by hand:
 

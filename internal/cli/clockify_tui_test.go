@@ -200,3 +200,241 @@ func TestClockifyMapperOnlySelectsUnmappedInRange(t *testing.T) {
 		t.Fatal("changed existing mapping's billable setting")
 	}
 }
+
+func TestClockifyNavigationEditingAndEmptyViews(t *testing.T) {
+	t.Parallel()
+	m := newClockifyModel([]integrations.Project{{ID: "a", Name: "Alpha"}, {ID: "b", Name: "Beta"}})
+	if m.Init() != nil {
+		t.Fatal("unexpected initial command")
+	}
+	next, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
+	m = next.(clockifyModel)
+	if m.width != 100 || m.height != 40 {
+		t.Fatal("resize ignored")
+	}
+	m = clockifyKey(m, "up")
+	if m.cursor != 1 {
+		t.Fatal("up did not wrap")
+	}
+	m = clockifyKey(m, "down")
+	if m.cursor != 0 {
+		t.Fatal("down did not wrap")
+	}
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyPgDown})
+	m = next.(clockifyModel)
+	if m.cursor != 1 {
+		t.Fatal("page down ignored")
+	}
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyPgUp})
+	m = next.(clockifyModel)
+	if m.cursor != 0 {
+		t.Fatal("page up ignored")
+	}
+	m = clockifyKey(m, "/")
+	m = clockifyKey(m, "é")
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeySpace})
+	m = next.(clockifyModel)
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyBackspace})
+	m = next.(clockifyModel)
+	if m.query != "é" {
+		t.Fatalf("unicode editing %q", m.query)
+	}
+	m = clockifyKey(m, "esc")
+	if m.searching {
+		t.Fatal("did not stop searching")
+	}
+	m = clockifyKey(m, "esc")
+	if m.query != "" {
+		t.Fatal("did not clear query")
+	}
+	m = reviewModel()
+	m.screen = clockifyEditor
+	m = clockifyKey(m, "p")
+	m = clockifyKey(m, "esc")
+	if m.screen != clockifyEditor || m.pickingForEntry {
+		t.Fatal("picker cancel failed")
+	}
+	m = clockifyKey(m, "p")
+	m = clockifyKey(m, "s")
+	if m.screen != clockifyEditor || m.pickingForEntry {
+		t.Fatal("picker skip failed")
+	}
+	m = clockifyKey(m, "d")
+	m = clockifyKey(m, "esc")
+	if m.field != "" {
+		t.Fatal("did not cancel description edit")
+	}
+	m = clockifyKey(m, "d")
+	m.input = " "
+	m = clockifyKey(m, "enter")
+	if m.message == "" {
+		t.Fatal("accepted blank description")
+	}
+	if !strings.Contains(m.View(), "description") {
+		t.Fatal("missing validation view")
+	}
+	m.input = strings.Repeat("a", 3000)
+	m = clockifyKey(m, "b")
+	if len([]rune(m.input)) != 3000 {
+		t.Fatal("input exceeded bound")
+	}
+	m.input = "reviewed"
+	m = clockifyKey(m, "enter")
+	if m.queue[0].Entry.Description != "reviewed" {
+		t.Fatal("did not save description")
+	}
+	m = clockifyKey(m, "t")
+	m.input = "1h"
+	m.queue[0].Entry.Start = "bad"
+	m = clockifyKey(m, "enter")
+	if !strings.Contains(m.message, "Invalid entry start") {
+		t.Fatal("accepted invalid start")
+	}
+	m = clockifyKey(m, "esc")
+	m = clockifyKey(m, "enter")
+	m = clockifyKey(m, "up")
+	m = clockifyKey(m, "down")
+	m = clockifyKey(m, "p")
+	m = clockifyKey(m, "n")
+	if m.screen != clockifyReview || m.done {
+		t.Fatal("decline failed")
+	}
+	m = reviewModel()
+	m.provider = "Timetable"
+	m.screen = clockifyEditor
+	before := m.queue[0].Entry.Billable
+	m = clockifyKey(m, "b")
+	if m.queue[0].Entry.Billable != before || strings.Contains(m.View(), "Billable") {
+		t.Fatal("Timetable exposes unsupported billable edit")
+	}
+	if got := m.projectName("missing"); got != "missing" {
+		t.Fatalf("unknown project %q", got)
+	}
+	m = reviewModel()
+	m.queue = nil
+	if !strings.Contains(m.View(), "Nothing will be uploaded") {
+		t.Fatal("missing empty batch view")
+	}
+	m = clockifyKey(m, "enter")
+	if m.screen != clockifyReview {
+		t.Fatal("edited empty queue")
+	}
+	m = clockifyKey(m, "p")
+	if !m.done {
+		t.Fatal("empty review did not finish")
+	}
+	m = newClockifyModel(nil)
+	if !strings.Contains(m.View(), "No matching projects") {
+		t.Fatal("missing empty picker")
+	}
+	m.width = 20
+	if !strings.Contains(m.View(), "Enlarge terminal") {
+		t.Fatal("missing small terminal notice")
+	}
+}
+
+func TestClockifyPrompterMapsTimetableSkipsAndPropagatesErrors(t *testing.T) {
+	t.Parallel()
+	stop := int64(2000)
+	frames := []store.Frame{{Start: 1000, Stop: &stop, Project: "portal"}}
+	for _, tc := range []struct {
+		name          string
+		skip, failure bool
+	}{{name: "map"}, {name: "skip", skip: true}, {name: "failed", failure: true}} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := integrations.Config{Projects: map[string]integrations.Mapping{}}
+			opts := integrations.Options{Connection: "timetable"}
+			var out strings.Builder
+			p := exportPrompter{out: &out, provider: "Timetable", run: func(m clockifyModel) (clockifyModel, error) {
+				if m.provider != "Timetable" {
+					t.Fatal("lost provider")
+				}
+				if tc.failure {
+					return m, fmt.Errorf("canceled")
+				}
+				m.done = true
+				if !tc.skip {
+					m.selected = "project"
+				}
+				return m, nil
+			}}
+			err := p.mapMissing(&c, frames, &opts)
+			if (err != nil) != tc.failure {
+				t.Fatalf("got %v", err)
+			}
+			if tc.failure {
+				return
+			}
+			if tc.skip {
+				if !opts.SkipProjects["portal"] || !strings.Contains(out.String(), "Skipping") {
+					t.Fatal("did not record skip")
+				}
+			} else if c.Routes["timetable"]["portal"].ProjectID != "project" {
+				t.Fatal("did not save route")
+			}
+		})
+	}
+	for _, tc := range []struct {
+		name    string
+		failure bool
+	}{{name: "review"}, {name: "canceled", failure: true}} {
+		t.Run(tc.name, func(t *testing.T) {
+			source := reviewModel().queue
+			p := exportPrompter{provider: "Timetable", dryRun: true, run: func(m clockifyModel) (clockifyModel, error) {
+				if m.provider != "Timetable" || !m.dryRun || m.screen != clockifyReview {
+					t.Fatal("lost review context")
+				}
+				if tc.failure {
+					return m, fmt.Errorf("canceled")
+				}
+				m.queue[0].Entry.Description = "edited"
+				return m, nil
+			}}
+			got, err := p.review(source)
+			if (err != nil) != tc.failure {
+				t.Fatalf("got %v", err)
+			}
+			if !tc.failure && (got[0].Entry.Description != "edited" || source[0].Entry.Description == "edited") {
+				t.Fatal("review did not isolate export edits")
+			}
+		})
+	}
+	if projectScore("", "anything") != 0 || projectScore("", "") != 10000 {
+		t.Fatal("empty score")
+	}
+	if projectScore(strings.Repeat("a", 250), strings.Repeat("b", 250)) < 0 {
+		t.Fatal("negative score")
+	}
+}
+
+func TestClockifyViewsShowPreviewSearchAndValidation(t *testing.T) {
+	t.Parallel()
+	m := reviewModel()
+	m.dryRun = true
+	if !strings.Contains(m.View(), "DRY RUN") {
+		t.Fatal("preview label missing")
+	}
+	m.screen = clockifyPicker
+	m.searching = true
+	m.query = "no match"
+	view := m.View()
+	if !strings.Contains(view, "no match") || !strings.Contains(view, "No matching projects") {
+		t.Fatal("search state missing")
+	}
+	m = reviewModel()
+	m.screen = clockifyEditor
+	m.field = "duration"
+	m.input = "bad"
+	m.message = "Use a positive duration"
+	if !strings.Contains(m.View(), m.message) {
+		t.Fatal("validation missing")
+	}
+	m = newClockifyModel(nil)
+	m = clockifyKey(m, "esc")
+	if m.done {
+		t.Fatal("empty picker approved export")
+	}
+	if got := clockifySafe("line\n\t\x1b[31m"); got != "line   [31m" {
+		t.Fatalf("unsafe controls %q", got)
+	}
+}

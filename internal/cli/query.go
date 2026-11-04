@@ -517,6 +517,9 @@ func writeAggregatePlainMessages(w io.Writer, summaries []btReport.Summary, dail
 		}
 		for pi, project := range summary.Projects {
 			fmt.Fprintf(w, "  %s - %s\n", styleText("project", project.Name), styleText("time", formatDuration(int64(project.Time))))
+			for _, message := range untaggedProjectMessages(frames, project.Name) {
+				fmt.Fprintf(w, "    ↳ %s\n", message)
+			}
 			for _, tag := range project.Tags {
 				fmt.Fprintf(w, "\t[%s %s]\n", styleText("tag", fmt.Sprintf("%-*s", 2, tag.Name)), styleText("time", fmt.Sprintf("%11s", formatDuration(int64(tag.Time)))))
 				seen := map[string]bool{}
@@ -536,6 +539,19 @@ func writeAggregatePlainMessages(w io.Writer, summaries []btReport.Summary, dail
 		fmt.Fprintln(w)
 	}
 }
+
+func untaggedProjectMessages(frames []store.Frame, project string) []string {
+	messages := []string{}
+	seen := map[string]bool{}
+	for _, frame := range frames {
+		if frame.Project == project && len(frame.Tags) == 0 && frame.Message != "" && !seen[frame.Message] {
+			messages = append(messages, frame.Message)
+			seen[frame.Message] = true
+		}
+	}
+	return messages
+}
+
 func formatDuration(seconds int64) string {
 	negative := seconds < 0
 	if negative {

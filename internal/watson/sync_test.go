@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -119,5 +120,160 @@ func TestFailedPushDoesNotPersistPulledFrames(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dir, "last_sync")); !os.IsNotExist(err) {
 		t.Fatalf("last_sync created on failure: %v", err)
+	}
+}
+
+type syncDoerFunc func(*http.Request) (*http.Response, error)
+
+func (f syncDoerFunc) Do(r *http.Request) (*http.Response, error) { return f(r) }
+
+type failingSyncReader struct{}
+
+func (failingSyncReader) Read([]byte) (int, error) { return 0, io.ErrUnexpectedEOF }
+func (failingSyncReader) Close() error             { return nil }
+
+func TestSyncTransportFailuresAndRemoteValidation(t *testing.T) {
+	tests := []struct {
+		name, body      string
+		status          int
+		network, broken bool
+	}{
+		{name: "network", network: true},
+		{name: "server status", status: 500, body: "unavailable"},
+		{name: "invalid JSON", status: 200, body: "{"},
+		{name: "invalid UUID", status: 200, body: `[{"id":"bad","begin_at":1,"end_at":2}]`},
+		{name: "invalid UUID hex", status: 200, body: `[{"id":"zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz","begin_at":1,"end_at":2}]`},
+		{name: "invalid start", status: 200, body: `[{"id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","begin_at":{},"end_at":2}]`},
+		{name: "invalid stop", status: 200, body: `[{"id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","begin_at":1,"end_at":"bad"}]`},
+		{name: "incomplete body", status: 200, broken: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s, _ := testService(t)
+			if err := s.Config.Set("backend", "url", "http://sync.invalid"); err != nil {
+				t.Fatal(err)
+			}
+			if err := s.Config.Set("backend", "token", "secret"); err != nil {
+				t.Fatal(err)
+			}
+			client := syncDoerFunc(func(*http.Request) (*http.Response, error) {
+				if tt.network {
+					return nil, io.ErrUnexpectedEOF
+				}
+				var body io.ReadCloser = io.NopCloser(strings.NewReader(tt.body))
+				if tt.broken {
+					body = failingSyncReader{}
+				}
+				return &http.Response{StatusCode: tt.status, Body: body}, nil
+			})
+			if _, _, err := s.Sync(client); err == nil {
+				t.Fatal("invalid remote response accepted")
+			}
+			if _, err := os.Stat(filepath.Join(s.Repo.Dir, "last_sync")); !os.IsNotExist(err) {
+				t.Fatalf("failed sync checkpoint persisted: %v", err)
+			}
+		})
+	}
+	s, _ := testService(t)
+	if _, _, err := s.Sync(nil); err == nil {
+		t.Fatal("unconfigured sync accepted")
+	}
+	if err := s.Config.Set("backend", "url", ":bad"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Config.Set("backend", "token", "secret"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := s.Sync(nil); err == nil {
+		t.Fatal("invalid URL accepted")
+	}
+	if err := s.Repo.SaveConfig(nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(s.Repo.Dir, "last_sync"), []byte("bad"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := s.Sync(nil); err == nil {
+		t.Fatal("invalid local checkpoint accepted")
+	}
+}
+
+func TestSyncPreservesLocalMessagesAndSkipsIncompleteFrames(t *testing.T) {
+	s, now := testService(t)
+	id := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	s.Frames = []store.Frame{{ID: id, Project: "old", Start: 1, Stop: ptr(2), Message: "local", UpdatedAt: 3}, {ID: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", Project: "running", Start: 4, UpdatedAt: 5}}
+	s.Messages.Frames[id] = "local"
+	if err := s.Config.Set("backend", "url", "http://sync.invalid"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Config.Set("backend", "token", "secret"); err != nil {
+		t.Fatal(err)
+	}
+	client := syncDoerFunc(func(r *http.Request) (*http.Response, error) {
+		if r.Method == http.MethodGet {
+			return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(`[{"id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","project":"remote","begin_at":"1.5","end_at":"2.9"}]`))}, nil
+		}
+		data, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(data) != "[]" {
+			t.Errorf("outgoing=%s", data)
+		}
+		return &http.Response{StatusCode: 201, Body: io.NopCloser(strings.NewReader(""))}, nil
+	})
+	pulled, pushed, err := s.Sync(client)
+	if err != nil || pulled != 1 || pushed != 0 || s.Frames[0].Message != "local" {
+		t.Fatalf("pulled=%d pushed=%d frames=%#v err=%v now=%v", pulled, pushed, s.Frames, err, now)
+	}
+}
+
+func TestSyncPushErrorsAndJSONUnicode(t *testing.T) {
+	s, _ := testService(t)
+	for _, tt := range []struct {
+		name   string
+		client HTTPDoer
+	}{
+		{"network", syncDoerFunc(func(*http.Request) (*http.Response, error) { return nil, io.ErrUnexpectedEOF })},
+		{"body", syncDoerFunc(func(*http.Request) (*http.Response, error) {
+			return &http.Response{StatusCode: 201, Body: failingSyncReader{}}, nil
+		})},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := s.push(tt.client, "http://sync.invalid", "secret", nil); err == nil {
+				t.Fatal("push failure ignored")
+			}
+		})
+	}
+	if err := s.push(nil, "http://bad\n", "secret", nil); err == nil {
+		t.Fatal("invalid push URL accepted")
+	}
+	for _, id := range []string{"bad", "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz"} {
+		if _, err := uuidURN(id); err == nil {
+			t.Fatal("invalid ID accepted")
+		}
+	}
+	if _, err := remoteTimestamp([]byte(`{}`)); err == nil {
+		t.Fatal("invalid timestamp accepted")
+	}
+	data, err := pythonCompactJSON("café 😀 <&>")
+	if err != nil || string(data) != `"caf\u00e9 \ud83d\ude00 <&>"` {
+		t.Fatalf("JSON=%s err=%v", data, err)
+	}
+	if _, err := pythonCompactJSON(make(chan int)); err == nil {
+		t.Fatal("unsupported JSON accepted")
+	}
+	data, err = marshalPushFrames([]pushFrame{{ID: "a", Tags: nonNilTags(nil)}, {ID: "b", Tags: nonNilTags([]string{"tag"})}})
+	if err != nil || !strings.Contains(string(data), `"tags": []`) {
+		t.Fatalf("body=%s err=%v", data, err)
+	}
+	for _, body := range []string{"", "null"} {
+		client := syncDoerFunc(func(*http.Request) (*http.Response, error) {
+			return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(body))}, nil
+		})
+		frames, err := s.pull(client, "http://sync.invalid", "secret", 0)
+		if err != nil || len(frames) != 0 {
+			t.Fatalf("empty response=%#v err=%v", frames, err)
+		}
 	}
 }

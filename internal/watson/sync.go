@@ -72,7 +72,10 @@ func (s *Service) Sync(client HTTPDoer) (pulled, pushed int, err error) {
 		if err != nil {
 			return 0, 0, err
 		}
-		frame := store.Frame{Start: start, Stop: &stop, Project: remote.Project, ID: id, Tags: remote.Tags, UpdatedAt: s.Now().UTC().Unix()}
+		frame := store.Frame{
+			Start: start, Stop: &stop, Project: remote.Project, ID: id, Tags: remote.Tags,
+			Message: s.Messages.Frames[id], UpdatedAt: s.Now().UTC().Unix(),
+		}
 		replaced := false
 		for i := range s.Frames {
 			if s.Frames[i].ID == id {
@@ -134,14 +137,20 @@ func (s *Service) pull(client HTTPDoer, base, token string, lastSync int64) ([]r
 	}
 	query.Set("last_sync", when.Format("2006-01-02T15:04:05-07:00"))
 	parsed.RawQuery = query.Encode()
-	request, _ := http.NewRequest(http.MethodGet, parsed.String(), nil)
+	request, err := http.NewRequest(http.MethodGet, parsed.String(), nil)
+	if err != nil {
+		return nil, err
+	}
 	setSyncHeaders(request, token)
 	response, err := client.Do(request)
 	if err != nil {
 		return nil, errors.New("Unable to reach the server.")
 	}
 	defer response.Body.Close()
-	body, _ := io.ReadAll(response.Body)
+	body, err := io.ReadAll(response.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read sync response: %w", err)
+	}
 	if response.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("An error occurred with the remote server: %s", strings.TrimSpace(string(body)))
 	}
@@ -161,14 +170,20 @@ func (s *Service) push(client HTTPDoer, base, token string, frames []pushFrame) 
 		return err
 	}
 	endpoint := strings.TrimRight(base, "/") + "/frames/bulk/"
-	request, _ := http.NewRequest(http.MethodPost, endpoint, bytes.NewReader(body))
+	request, err := http.NewRequest(http.MethodPost, endpoint, bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
 	setSyncHeaders(request, token)
 	response, err := client.Do(request)
 	if err != nil {
 		return errors.New("Unable to reach the server.")
 	}
 	defer response.Body.Close()
-	responseBody, _ := io.ReadAll(response.Body)
+	responseBody, err := io.ReadAll(response.Body)
+	if err != nil {
+		return fmt.Errorf("read sync response: %w", err)
+	}
 	if response.StatusCode != http.StatusCreated {
 		return fmt.Errorf("An error occurred with the remote server (status: %d). Response was:\n%s", response.StatusCode, string(responseBody))
 	}

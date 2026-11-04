@@ -259,6 +259,11 @@ func samePath(first, second string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
+	firstInfo, firstErr := os.Stat(first)
+	secondInfo, secondErr := os.Stat(second)
+	if firstErr == nil && secondErr == nil && os.SameFile(firstInfo, secondInfo) {
+		return true, nil
+	}
 	return filepath.Clean(first) == filepath.Clean(second), nil
 }
 

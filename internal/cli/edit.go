@@ -144,7 +144,7 @@ func (a *app) edit() *cobra.Command {
 				fmt.Fprintf(cmd.OutOrStdout(), "Updated message for running project %s.\n", styleText("project", frame.Project))
 				return nil
 			}
-			updated, err := s.SetFrameMessage(frame.ID, message)
+			updated, err := s.SetFrameMessage(ref, message)
 			if err != nil {
 				return err
 			}
@@ -181,7 +181,9 @@ func (a *app) edit() *cobra.Command {
 			if err != nil {
 				fmt.Fprintf(cmd.ErrOrStderr(), "Error while parsing inputted values: %v\n", err)
 				fmt.Fprintln(cmd.ErrOrStderr(), "Press any key to continue...")
-				_, _ = bufio.NewReader(cmd.InOrStdin()).ReadString('\n')
+				if _, readErr := reader.ReadString('\n'); readErr != nil {
+					return errors.New("Aborted!")
+				}
 				initial = edited
 				continue
 			}
@@ -214,12 +216,16 @@ func (a *app) edit() *cobra.Command {
 				fmt.Fprintf(cmd.OutOrStdout(), "Edited frame for project %s%s, from %s to - (-)\n", styleText("project", parsed.Project), formatTags(parsed.Tags), styleText("time", parsed.Start.Format("15:04:05")))
 				return nil
 			}
-			updated, err := applyFrameEdit(s, frame.ID, parsed)
+			updated, err := applyFrameEdit(s, ref, parsed)
 			if err != nil {
 				return err
 			}
 			if parsed.MessageSet {
-				updated, err = s.SetFrameMessage(frame.ID, parsed.Message)
+				messageRef := updated.ID
+				if messageRef == "" || updated.IDNull {
+					messageRef = ref
+				}
+				updated, err = s.SetFrameMessage(messageRef, parsed.Message)
 				if err != nil {
 					return err
 				}

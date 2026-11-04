@@ -3,10 +3,14 @@ package cli
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
+	"testing/fstest"
 
 	burrowskills "github.com/fabean/BurrowTime/skills"
 )
@@ -185,3 +189,222 @@ func runSkillCommand(a *app, args ...string) (string, error) {
 	err := root.Execute()
 	return output.String(), err
 }
+
+func TestSkillHomeAndDestinations(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	a := &app{}
+	if got, err := a.userHomeDir(); err != nil || got != home {
+		t.Fatalf("home %q %v", got, err)
+	}
+	destinations, err := a.skillDestinations(" CLAUDE ")
+	if err != nil || len(destinations) != 1 || destinations[0].Path != filepath.Join(home, ".claude", "skills", burrowskills.TrackTimeWithBurrowTime) {
+		t.Fatalf("destinations %+v %v", destinations, err)
+	}
+	t.Setenv("CODEX_HOME", filepath.Join(home, "custom-codex"))
+	if got, err := a.legacyCodexSkillDestination(); err != nil || got != filepath.Join(home, "custom-codex", "skills", burrowskills.TrackTimeWithBurrowTime) {
+		t.Fatalf("legacy %q %v", got, err)
+	}
+	t.Setenv("CODEX_HOME", "")
+	t.Setenv("HOME", "")
+	t.Setenv("USERPROFILE", "")
+	if _, err := a.userHomeDir(); err == nil {
+		t.Fatal("accepted missing home directory")
+	}
+	if _, err := a.skillDestinations("codex"); err == nil {
+		t.Fatal("accepted unavailable destination")
+	}
+	if _, err := a.legacyCodexSkillDestination(); err == nil {
+		t.Fatal("accepted unavailable legacy destination")
+	}
+	if _, err := runSkillCommand(a, "doctor"); err == nil {
+		t.Fatal("doctor accepted missing home")
+	}
+}
+
+func TestSkillDoctorReportsBrokenInstallAndCapabilities(t *testing.T) {
+	for _, tc := range []struct {
+		name, data, want string
+		probeError       bool
+		installed        bool
+	}{
+		{name: "missing install", data: `{"agent_protocol":1,"features":{"agent_sessions":true}}`, want: "FAIL skill"},
+		{name: "probe failure", probeError: true, installed: true, want: "FAIL burrowtime on PATH"},
+		{name: "malformed capabilities", data: "{", installed: true, want: "FAIL burrowtime capabilities"},
+		{name: "missing feature", data: `{"agent_protocol":1,"features":{}}`, installed: true, want: "does not support"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a := &app{homeDir: t.TempDir(), capabilitiesProbe: func() ([]byte, error) {
+				if tc.probeError {
+					return nil, fmt.Errorf("probe failed")
+				}
+				return []byte(tc.data), nil
+			}}
+			if tc.installed {
+				if _, err := runSkillCommand(a, "install", "codex"); err != nil {
+					t.Fatal(err)
+				}
+			}
+			out, err := runSkillCommand(a, "doctor")
+			if err == nil || !strings.Contains(out, tc.want) || !strings.Contains(err.Error(), "found 1 problem") {
+				t.Fatalf("got %q %v", out, err)
+			}
+		})
+	}
+	t.Run("unsupported", func(t *testing.T) {
+		if _, err := runSkillCommand(&app{homeDir: t.TempDir()}, "doctor", "unknown"); err == nil || !strings.Contains(err.Error(), "unsupported agent") {
+			t.Fatalf("got %v", err)
+		}
+	})
+}
+
+func TestSkillDoctorNormalizesAgentBeforeLegacyCheck(t *testing.T) {
+	a := &app{homeDir: t.TempDir(), capabilitiesProbe: func() ([]byte, error) { return json.Marshal(currentCapabilities()) }}
+	if _, err := runSkillCommand(a, "install", "codex"); err != nil {
+		t.Fatal(err)
+	}
+	legacy, err := a.legacyCodexSkillDestination()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(legacy, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := runSkillCommand(a, "doctor", " CODEX "); err == nil || !strings.Contains(out, "duplicate discovery") {
+		t.Fatalf("got %q %v", out, err)
+	}
+}
+
+func TestSkillLegacyInspectionFailure(t *testing.T) {
+	a := &app{homeDir: t.TempDir(), capabilitiesProbe: func() ([]byte, error) { return json.Marshal(currentCapabilities()) }}
+	if err := os.WriteFile(filepath.Join(a.homeDir, ".codex"), []byte("file"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runSkillCommand(a, "install", "codex"); err == nil || !strings.Contains(err.Error(), "inspect legacy Codex") {
+		t.Fatalf("got %v", err)
+	}
+	if out, err := runSkillCommand(a, "doctor"); err == nil || !strings.Contains(out, "inspect legacy Codex") {
+		t.Fatalf("got %q %v", out, err)
+	}
+}
+
+func TestProbeCapabilitiesSubprocess(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("executable shell fixtures")
+	}
+	for _, tc := range []struct{ name, script, want, wantError string }{
+		{name: "success", script: `test "$1" = capabilities && test "$2" = --json || exit 4; printf '{"agent_protocol":1}'`, want: `{"agent_protocol":1}`},
+		{name: "malformed", script: `printf '{'`, want: "{"},
+		{name: "reported error", script: `printf 'fixture failed' >&2; exit 1`, wantError: "fixture failed"},
+		{name: "silent error", script: `exit 2`, wantError: "exit status 2"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			if err := os.WriteFile(filepath.Join(dir, "burrowtime"), []byte("#!/bin/sh\n"+tc.script+"\n"), 0700); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("PATH", dir)
+			data, err := (&app{}).probeCapabilities()
+			if tc.wantError != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantError) {
+					t.Fatalf("got %q %v", data, err)
+				}
+			} else if err != nil || string(data) != tc.want {
+				t.Fatalf("got %q %v", data, err)
+			}
+		})
+	}
+	t.Run("not installed", func(t *testing.T) {
+		t.Setenv("PATH", t.TempDir())
+		if _, err := (&app{}).probeCapabilities(); err == nil || !strings.Contains(err.Error(), "find burrowtime") {
+			t.Fatalf("got %v", err)
+		}
+	})
+}
+
+func TestSkillFileValidation(t *testing.T) {
+	source := fstest.MapFS{"SKILL.md": {Data: []byte("bundled")}, "agents/openai.yaml": {Data: []byte("agent")}}
+	for _, tc := range []struct {
+		name, want string
+		setup      func(*testing.T, string)
+	}{
+		{name: "missing", want: "missing", setup: func(*testing.T, string) {}},
+		{name: "directory", want: "invalid skill file", setup: func(t *testing.T, path string) {
+			if err := os.Mkdir(path, 0700); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{name: "different", want: "differs from", setup: func(t *testing.T, path string) {
+			if err := os.WriteFile(path, []byte("local"), 0600); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{name: "symlink", want: "invalid skill file", setup: func(t *testing.T, path string) {
+			if err := os.Symlink(filepath.Join(t.TempDir(), "missing"), path); err != nil {
+				t.Skip(err)
+			}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			tc.setup(t, filepath.Join(dir, "SKILL.md"))
+			if err := verifySkillFiles(source, dir); err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("got %v", err)
+			}
+		})
+	}
+	t.Run("install file destination", func(t *testing.T) {
+		dir := t.TempDir()
+		dest := filepath.Join(dir, "skill")
+		if err := os.WriteFile(dest, []byte("file"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := installSkillFiles(source, dest, true); err == nil || !strings.Contains(err.Error(), "non-directory") {
+			t.Fatalf("got %v", err)
+		}
+	})
+	t.Run("install non-file", func(t *testing.T) {
+		dir := t.TempDir()
+		if err := os.Mkdir(filepath.Join(dir, "SKILL.md"), 0700); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := installSkillFiles(source, dir, true); err == nil || !strings.Contains(err.Error(), "non-file") {
+			t.Fatalf("got %v", err)
+		}
+	})
+	t.Run("install symlink file", func(t *testing.T) {
+		dir := t.TempDir()
+		if err := os.Symlink(filepath.Join(t.TempDir(), "missing"), filepath.Join(dir, "SKILL.md")); err != nil {
+			t.Skip(err)
+		}
+		if _, err := installSkillFiles(source, dir, true); err == nil || !strings.Contains(err.Error(), "replace symlink") {
+			t.Fatalf("got %v", err)
+		}
+	})
+	t.Run("invalid source", func(t *testing.T) {
+		source := brokenSkillFS{}
+		if _, _, err := bundledSkillFiles(source); err == nil {
+			t.Fatal("ignored source error")
+		}
+		if _, err := installSkillFiles(source, t.TempDir(), false); err == nil || !strings.Contains(err.Error(), "read bundled skill") {
+			t.Fatalf("got %v", err)
+		}
+		if err := verifySkillFiles(source, t.TempDir()); err == nil || !strings.Contains(err.Error(), "read bundled skill") {
+			t.Fatalf("got %v", err)
+		}
+	})
+	t.Run("unreadable source file", func(t *testing.T) {
+		if _, _, err := bundledSkillFiles(unreadableSkillFS{FS: source}); err == nil {
+			t.Fatal("ignored unreadable source file")
+		}
+	})
+}
+
+type brokenSkillFS struct{}
+
+func (brokenSkillFS) Open(string) (fs.File, error) { return nil, fs.ErrPermission }
+
+type unreadableSkillFS struct{ fs.FS }
+
+func (unreadableSkillFS) ReadFile(string) ([]byte, error) { return nil, fs.ErrPermission }

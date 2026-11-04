@@ -2,7 +2,6 @@ package cli
 
 import (
 	"bufio"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -928,7 +927,7 @@ func (a *app) start() *cobra.Command {
 				displayStart = *when
 			}
 			if jsonOutput {
-				return json.NewEncoder(cmd.OutOrStdout()).Encode(timer)
+				return writeStartedTimerJSON(cmd, timer)
 			}
 			if len(timers) == 0 {
 				fmt.Fprintf(cmd.OutOrStdout(), "Starting project %s%s at %s%s\n", styleText("project", timer.Project), formatTags(timer.Tags), styleText("time", displayStart.Format("15:04")), startedMessageSuffix(message))
@@ -985,8 +984,11 @@ func (a *app) start() *cobra.Command {
 			displayStart = *when
 		}
 		if jsonOutput {
-			timer := store.ActiveTimer{ID: watson.PrimaryTimerID, Project: state.Project, Start: state.Start, Tags: state.Tags, Primary: true}
-			return json.NewEncoder(cmd.OutOrStdout()).Encode(timer)
+			timer := store.ActiveTimer{
+				ID: watson.PrimaryTimerID, Project: state.Project,
+				Start: state.Start, Tags: state.Tags, Message: message, Primary: true,
+			}
+			return writeStartedTimerJSON(cmd, timer)
 		}
 		fmt.Fprintf(cmd.OutOrStdout(), "Starting project %s%s at %s%s\n", styleText("project", state.Project), formatTags(state.Tags), styleText("time", displayStart.Format("15:04")), startedMessageSuffix(message))
 		return nil
@@ -1034,6 +1036,13 @@ func (a *app) start() *cobra.Command {
 	return cmd
 }
 
+func writeStartedTimerJSON(cmd *cobra.Command, timer store.ActiveTimer) error {
+	return writeJSON(cmd, struct {
+		store.ActiveTimer
+		Message string `json:"message,omitempty"`
+	}{ActiveTimer: timer, Message: timer.Message})
+}
+
 func startedMessageSuffix(message string) string {
 	if message != "" {
 		return " — " + message
@@ -1076,21 +1085,21 @@ func (a *app) stop() *cobra.Command {
 			when = &parsed
 		}
 		minutePrecision := minutePrecisionEnabled(s, a.name != "watson")
-		setStopMessage := func(ref string) error {
-			if !cmd.Flags().Changed("message") {
-				return nil
+		finishStop := func(frame store.Frame) error {
+			if cmd.Flags().Changed("message") {
+				var err error
+				frame, err = s.SetFrameMessage(frame.ID, message)
+				if err != nil {
+					return err
+				}
 			}
-			return s.SetTimerMessage(ref, message)
+			printStoppedFrame(cmd, frame, s.Now())
+			return nil
 		}
 		if all && timerRef != "" {
 			return errors.New("--all and --timer are mutually exclusive")
 		}
 		if all {
-			for _, timer := range s.RunningTimers() {
-				if err := setStopMessage(timer.ID); err != nil {
-					return err
-				}
-			}
 			if at == "" && minutePrecision {
 				when = floorAllStops(s)
 			}
@@ -1099,14 +1108,13 @@ func (a *app) stop() *cobra.Command {
 				return stopErr
 			}
 			for _, frame := range frames {
-				printStoppedFrame(cmd, frame, s.Now())
+				if err := finishStop(frame); err != nil {
+					return err
+				}
 			}
 			return nil
 		}
 		if timerRef != "" {
-			if err := setStopMessage(timerRef); err != nil {
-				return err
-			}
 			if at == "" && minutePrecision && !isAgentTimerRef(s, timerRef) {
 				parsed := floorMinute(s.Now())
 				when = &parsed
@@ -1116,17 +1124,13 @@ func (a *app) stop() *cobra.Command {
 			if stopErr != nil {
 				return stopErr
 			}
-			printStoppedFrame(cmd, frame, s.Now())
-			return nil
+			return finishStop(frame)
 		}
 		timers := s.RunningTimers()
 		if len(timers) == 0 {
 			return errors.New("No project started.")
 		}
 		if len(timers) == 1 || a.name == "watson" {
-			if err := setStopMessage(timers[0].ID); err != nil {
-				return err
-			}
 			if at == "" && minutePrecision && !isAgentTimer(s, timers[0].ID) {
 				parsed := floorMinute(s.Now())
 				when = &parsed
@@ -1136,8 +1140,7 @@ func (a *app) stop() *cobra.Command {
 			if stopErr != nil {
 				return stopErr
 			}
-			printStoppedFrame(cmd, frame, s.Now())
-			return nil
+			return finishStop(frame)
 		}
 		in, inOK := cmd.InOrStdin().(*os.File)
 		out, outOK := cmd.OutOrStdout().(*os.File)
@@ -1149,11 +1152,6 @@ func (a *app) stop() *cobra.Command {
 			return pickErr
 		}
 		if selection == stopAllSelection {
-			for _, timer := range s.RunningTimers() {
-				if err := setStopMessage(timer.ID); err != nil {
-					return err
-				}
-			}
 			if at == "" && minutePrecision {
 				when = floorAllStops(s)
 			}
@@ -1162,12 +1160,11 @@ func (a *app) stop() *cobra.Command {
 				return stopErr
 			}
 			for _, frame := range frames {
-				printStoppedFrame(cmd, frame, s.Now())
+				if err := finishStop(frame); err != nil {
+					return err
+				}
 			}
 			return nil
-		}
-		if err := setStopMessage(selection); err != nil {
-			return err
 		}
 		if at == "" && minutePrecision && !isAgentTimer(s, selection) {
 			parsed := floorMinute(s.Now())
@@ -1178,8 +1175,7 @@ func (a *app) stop() *cobra.Command {
 		if stopErr != nil {
 			return stopErr
 		}
-		printStoppedFrame(cmd, frame, s.Now())
-		return nil
+		return finishStop(frame)
 	}}
 	cmd.Flags().StringVar(&at, "at", "", "stop frame at a local time (for example '2:30 PM'; omit the date for today)")
 	cmd.Flags().StringVarP(&message, "message", "m", "", "message for the stopped session")

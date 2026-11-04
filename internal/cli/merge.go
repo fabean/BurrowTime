@@ -68,7 +68,7 @@ func (a *app) merge() *cobra.Command {
 			printConflict(cmd, left, right, displayLoc)
 			for {
 				fmt.Fprint(cmd.OutOrStdout(), "Select the frame you want to keep: left or right? (L/r): ")
-				answer, _ := reader.ReadString('\n')
+				answer, readErr := reader.ReadString('\n')
 				answer = strings.TrimSpace(answer)
 				if answer == "L" {
 					break
@@ -76,6 +76,9 @@ func (a *app) merge() *cobra.Command {
 				if answer == "r" {
 					replacements[right.ID] = right
 					break
+				}
+				if readErr != nil {
+					return fmt.Errorf("read merge selection: %w", readErr)
 				}
 				fmt.Fprintln(cmd.ErrOrStderr(), "Error: Response should be one of [L,r]")
 			}

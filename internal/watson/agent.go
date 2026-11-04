@@ -261,15 +261,15 @@ func stoppedAgentSessions(sessions []store.AgentSession, timerID, promotedTimerI
 	out := append([]store.AgentSession(nil), sessions...)
 	changed, matched := false, false
 	for i := range out {
-		if out[i].Running() && promotedTimerID != "" && out[i].TimerID == promotedTimerID {
-			out[i].TimerID = PrimaryTimerID
-			changed = true
-		}
 		selected := out[i].Running() && out[i].TimerID == timerID
 		if sessionID != "" {
 			selected = out[i].ID == sessionID && out[i].Running() && out[i].TimerID == timerID
 		}
 		if !selected {
+			if out[i].Running() && promotedTimerID != "" && out[i].TimerID == promotedTimerID {
+				out[i].TimerID = PrimaryTimerID
+				changed = true
+			}
 			continue
 		}
 		matched = true
@@ -293,16 +293,15 @@ func canceledAgentSessions(sessions []store.AgentSession, timerID, promotedTimer
 	out := append([]store.AgentSession(nil), sessions...)
 	changed := false
 	for i := range out {
-		if out[i].Running() && promotedTimerID != "" && out[i].TimerID == promotedTimerID {
-			out[i].TimerID = PrimaryTimerID
-			changed = true
-		}
 		if out[i].Running() && out[i].TimerID == timerID {
 			stop := stoppedAt
 			out[i].TimerID = ""
 			out[i].Status = store.AgentSessionCanceled
 			out[i].HeartbeatAt = stoppedAt
 			out[i].StoppedAt = &stop
+			changed = true
+		} else if out[i].Running() && promotedTimerID != "" && out[i].TimerID == promotedTimerID {
+			out[i].TimerID = PrimaryTimerID
 			changed = true
 		}
 	}

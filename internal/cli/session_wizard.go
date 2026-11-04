@@ -184,9 +184,6 @@ func (m sessionWizardModel) filteredProjects() []string {
 
 func (m sessionWizardModel) filteredTags() []string {
 	query := strings.ToLower(strings.TrimSpace(string(m.input)))
-	if query == "" {
-		return append([]string(nil), m.projectTags...)
-	}
 	filtered := make([]string, 0, len(m.projectTags))
 	for _, tag := range m.projectTags {
 		if !containsString(m.tags, tag) && strings.Contains(strings.ToLower(tag), query) {
@@ -517,9 +514,6 @@ func (m sessionWizardModel) result() sessionWizardResult {
 	if m.hasStart && !(m.kind == startWizard && m.startText == "") {
 		start := m.startTime
 		result.Start = &start
-		if m.kind == startWizard && m.startText == "" {
-			result.Start = nil
-		}
 	}
 	if m.kind == addWizard && m.hasEnd {
 		end := m.endTime

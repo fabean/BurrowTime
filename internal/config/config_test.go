@@ -87,3 +87,72 @@ func TestShellFieldsPreservesEmptyQuotedItems(t *testing.T) {
 		t.Fatalf("want %#v, got %#v", want, got)
 	}
 }
+
+func TestConfigSetLookupAndBooleanFallbacks(t *testing.T) {
+	c := New()
+	if err := c.Set("DEFAULT", "option", "bad"); err == nil {
+		t.Fatal("DEFAULT set accepted")
+	}
+	if err := c.Set("Mixed", "UPPER", "first"); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Set("Mixed", "upper", "second"); err != nil {
+		t.Fatal(err)
+	}
+	if !c.HasOption("Mixed", "UPPER") || c.HasOption("missing", "upper") || c.HasOption("Mixed", "missing") {
+		t.Fatal("option presence mismatch")
+	}
+	if c.Get("Mixed", "upper", "") != "second" || c.Get("missing", "upper", "fallback") != "fallback" {
+		t.Fatal("lookup mismatch")
+	}
+	if !c.Bool("Mixed", "missing", true) {
+		t.Fatal("boolean fallback ignored")
+	}
+	if err := c.Set("Mixed", "bool", "off"); err != nil {
+		t.Fatal(err)
+	}
+	if c.Bool("Mixed", "bool", true) {
+		t.Fatal("false boolean parsed as true")
+	}
+	path := filepath.Join(t.TempDir(), "config")
+	if err := os.WriteFile(path, []byte("[DEFAULT]\ninherited=yes\n[Mixed]\nvalue=own\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	c, err := Load(path)
+	if err != nil || !c.HasOption("Mixed", "INHERITED") || c.HasOption("Mixed", "missing") {
+		t.Fatalf("inheritance err=%v", err)
+	}
+}
+
+func TestConfigParseErrorCases(t *testing.T) {
+	tests := []struct{ name, data, want string }{
+		{"empty default duplicate", "[DEFAULT]\n[DEFAULT]\n", "already exists"},
+		{"default duplicate", "[DEFAULT]\na=1\n[DEFAULT]\n", "already exists"},
+		{"missing equals", "[s]\ninvalid\n", "parsing errors"},
+		{"empty key", "[s]\n=invalid\n", "parsing errors"},
+		{"unterminated header", "[s]\n[invalid\n", "parsing errors"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config")
+			if err := os.WriteFile(path, []byte(tt.data), 0600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := Load(path); err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("error=%v", err)
+			}
+		})
+	}
+	if _, err := Load(filepath.Join(t.TempDir(), "missing")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(t.TempDir()); err == nil {
+		t.Fatal("directory accepted as config")
+	}
+	if leadingWhitespace(" \t") != 2 {
+		t.Fatal("whitespace count mismatch")
+	}
+	if got := shellFields("trailing\\"); !reflect.DeepEqual(got, []string{"trailing\\"}) {
+		t.Fatalf("trailing escape=%#v", got)
+	}
+}

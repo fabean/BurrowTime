@@ -147,6 +147,12 @@ func tuiTickCommand() tea.Cmd {
 }
 
 func (m dashboardModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
+	if m.loadErr != nil {
+		if msg, ok := message.(tea.KeyMsg); ok && (msg.String() == "q" || msg.String() == "ctrl+c") {
+			return m, tea.Quit
+		}
+		return m, nil
+	}
 	switch msg := message.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
@@ -415,8 +421,10 @@ func (m dashboardModel) header(section string) string {
 		brand += tuiMutedStyle.Render("  /  ") + tuiTitleStyle.Render(section)
 	}
 	status := tuiMutedStyle.Render("idle")
-	if count := len(m.service.RunningTimers()); count > 0 {
-		status = tuiGoodStyle.Render(fmt.Sprintf("● %d tracking", count))
+	if m.service != nil {
+		if count := len(m.service.RunningTimers()); count > 0 {
+			status = tuiGoodStyle.Render(fmt.Sprintf("● %d tracking", count))
+		}
 	}
 	return padBetween(brand, status, m.contentWidth())
 }
@@ -875,6 +883,9 @@ func (m dashboardModel) reportLines(summary btReport.Summary) []string {
 			lines = append(lines, "    "+tuiMutedStyle.Render(truncate(strings.Join(parts, "   "), max(1, width-4))))
 		}
 		if m.reportMessagesVisible {
+			for _, message := range untaggedProjectMessages(m.tuiFrames(true), project.Name) {
+				lines = append(lines, "    "+tuiMutedStyle.Render("↳ "+message))
+			}
 			for _, tag := range project.Tags {
 				seen := map[string]bool{}
 				for _, frame := range m.tuiFrames(true) {
@@ -953,6 +964,12 @@ func (m dashboardModel) aggregateSummaryLinesWithFrames(summaries []btReport.Sum
 			nameWidth := min(32, max(10, width-20))
 			projectLine := "  " + tuiTitleStyle.Foreground(tuiAccent).Render(fmt.Sprintf("%-*s", nameWidth, truncate(project.Name, nameWidth)))
 			lines = append(lines, padBetween(projectLine, tuiTimeStyle.Render(formatDuration(int64(project.Time))), width))
+			if m.aggregateMessagesVisible {
+				for _, message := range untaggedProjectMessages(frames, project.Name) {
+					line := "    " + tuiMutedStyle.Render(truncate("↳ "+message, max(1, width-4)))
+					lines = append(lines, line)
+				}
+			}
 			for _, tag := range project.Tags {
 				tagWidth := min(40, max(10, width-20))
 				tagLine := "    " + tuiTagStyle.Render("#"+truncate(tag.Name, tagWidth))

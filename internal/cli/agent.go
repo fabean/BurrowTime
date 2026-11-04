@@ -156,19 +156,23 @@ func (a *app) agentSessionMutation(name, description string, action func(*watson
 			if err != nil {
 				return err
 			}
+			setStopMessage := false
 			if name == "stop" && cmd.Flags().Changed("message") {
-				for _, session := range s.AgentSessions {
-					if session.ID == sessionRef || strings.HasPrefix(session.ID, sessionRef) {
-						if err := s.SetTimerMessage(session.TimerID, message); err != nil {
-							return err
-						}
-						break
-					}
+				session, _, err := s.AgentSession(sessionRef)
+				if err != nil {
+					return err
 				}
+				setStopMessage = session.Running()
 			}
 			result, err := action(s, sessionRef)
 			if err != nil {
 				return err
+			}
+			if setStopMessage && len(result.Session.FrameIDs) > 0 {
+				frameID := result.Session.FrameIDs[len(result.Session.FrameIDs)-1]
+				if _, err := s.SetFrameMessage(frameID, message); err != nil {
+					return err
+				}
 			}
 			if jsonOutput {
 				return writeJSON(cmd, result)

@@ -32,6 +32,9 @@ func (a *app) clockify() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if c, ok := config.Connections[name]; ok && c.Plugin != "clockify" {
+				return fmt.Errorf("connection %q belongs to %s", name, c.Plugin)
+			}
 			return fn(cmd, dir, &config)
 		}
 	}

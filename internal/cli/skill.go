@@ -149,7 +149,7 @@ func (a *app) doctorSkill() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			target := "codex"
 			if len(args) == 1 {
-				target = args[0]
+				target = strings.ToLower(strings.TrimSpace(args[0]))
 			}
 			destinations, err := a.skillDestinations(target)
 			if err != nil {
