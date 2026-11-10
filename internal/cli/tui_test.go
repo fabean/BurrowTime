@@ -851,17 +851,9 @@ func TestDashboardViewsCoverEmptyActiveAndHistoricalData(t *testing.T) {
 	}
 	model.rangeIndex = 4
 	model.service.Now = func() time.Time { return time.Date(1960, time.January, 1, 0, 0, 0, 0, time.UTC) }
-	if _, err := model.tuiOptions(true); err == nil {
-		t.Fatal("all-time range before epoch accepted")
-	}
-	if got := model.tuiFrames(true); got != nil {
-		t.Fatalf("invalid options returned frames: %v", got)
-	}
-	if total := model.totalForRange(4); total != 0 {
-		t.Fatalf("invalid options produced total: %v", total)
-	}
-	if summaries, frames := model.aggregateSummariesWithFrames(); summaries != nil || frames != nil {
-		t.Fatal("invalid options produced summaries")
+	// --all spans 1970-01-01 through 9999-12-31, so a clock before 1970 is still a valid range.
+	if opts, err := model.tuiOptions(true); err != nil || opts.From.Year() != 1970 || opts.To.Year() != 9999 {
+		t.Fatalf("all-time options=%+v err=%v", opts, err)
 	}
 }
 
