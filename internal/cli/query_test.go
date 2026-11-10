@@ -27,6 +27,7 @@ func TestQueryOptionsTimespansAndValidation(t *testing.T) {
 		name      string
 		q         queryFlags
 		from      string
+		to        string
 		wantError string
 	}{
 		{name: "default", from: "2026-10-28"},
@@ -34,7 +35,7 @@ func TestQueryOptionsTimespansAndValidation(t *testing.T) {
 		{name: "week starts sunday", q: queryFlags{week: true}, from: "2026-11-01"},
 		{name: "month", q: queryFlags{month: true}, from: "2026-11-01"},
 		{name: "year", q: queryFlags{year: true}, from: "2026-01-01"},
-		{name: "all", q: queryFlags{all: true}, from: "1970-01-01"},
+		{name: "all", q: queryFlags{all: true}, from: "1970-01-01", to: "9999-12-31"},
 		{name: "explicit", q: queryFlags{from: "2026-10-01", to: "2026-10-02"}, from: "2026-10-01"},
 		{name: "bad from", q: queryFlags{from: "no date"}, wantError: "Invalid time"},
 		{name: "bad to", q: queryFlags{to: "no date"}, wantError: "Invalid time"},
@@ -55,6 +56,9 @@ func TestQueryOptionsTimespansAndValidation(t *testing.T) {
 			}
 			if err != nil || got.From.Format("2006-01-02") != tc.from || !got.IncludePartial {
 				t.Fatalf("options=%+v err=%v", got, err)
+			}
+			if tc.to != "" && got.To.Format("2006-01-02") != tc.to {
+				t.Fatalf("to=%s want %s options=%+v", got.To.Format("2006-01-02"), tc.to, got)
 			}
 		})
 	}
@@ -217,5 +221,19 @@ func TestAggregateShowsUntaggedMessagesWithTaggedSessions(t *testing.T) {
 	shown, err := runBurrowTimeCommand(dir, append(args, "--show-messages")...)
 	if err != nil || strings.Count(shown, "↳ untagged work") != 1 || strings.Count(shown, "↳ tagged work") != 1 || !strings.Contains(shown, "3h 00m 00s") {
 		t.Fatalf("shown=%q err=%v", shown, err)
+	}
+}
+
+func TestLogAllIncludesFutureFrames(t *testing.T) {
+	dir := t.TempDir()
+	if _, err := runBurrowTimeCommand(dir, "add", "-f", "2099-01-02 10:00:00", "-t", "2099-01-02 11:00:00", "future"); err != nil {
+		t.Fatal(err)
+	}
+	out, err := runBurrowTimeCommand(dir, "log", "--all", "--json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, `"project": "future"`) {
+		t.Fatalf("log --all omitted future frame: %s", out)
 	}
 }

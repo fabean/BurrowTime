@@ -165,6 +165,9 @@ func (q queryFlags) options(s *watson.Service, reportMode bool) (btReport.Option
 	}
 	if q.all {
 		from = time.Date(1970, 1, 1, 0, 0, 0, 0, local)
+		// End far enough ahead that planned future frames from `add` stay visible.
+		// Leaving `to` at now made --all mean "through today" and hid them.
+		to = time.Date(9999, 12, 31, 0, 0, 0, 0, local)
 	}
 	from, to = btReport.DayBounds(from, to)
 	if from.After(to) {
